@@ -1,0 +1,12 @@
+[Unit]
+Description=Padel Bot Daily Booking Run
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=padelbot
+Group=padelbot
+WorkingDirectory=/opt/padel-bot
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/padel-bot/.venv/bin/python -m app.runner --wait --attempts 10

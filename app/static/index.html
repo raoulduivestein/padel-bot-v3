@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Padel Bot</title>
+    <link rel="stylesheet" href="/static/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <h1>Padel Bot</h1>
+          <p id="statusText">Config laden...</p>
+        </div>
+        <div class="actions">
+          <button id="reloadBtn" type="button">Reload</button>
+          <button id="saveBtn" type="button" class="primary">Save</button>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Main sections">
+        <button class="tab active" data-tab="run" type="button">Run</button>
+        <button class="tab" data-tab="config" type="button">Config</button>
+      </nav>
+
+      <section id="runTab" class="tab-page active">
+        <section class="grid">
+          <section class="panel">
+            <div class="section-head">
+              <h2>Direct Run</h2>
+            </div>
+            <div class="run-summary">
+              <div>
+                <span>Days ahead</span>
+                <strong id="summaryDays">-</strong>
+              </div>
+              <div>
+                <span>Target</span>
+                <strong id="summaryTarget">-</strong>
+              </div>
+              <div>
+                <span>Club</span>
+                <strong id="summaryClub">-</strong>
+              </div>
+            </div>
+            <label>
+              Attempts
+              <input id="runAttempts" type="number" min="1" max="20" value="10">
+            </label>
+            <div class="actions left">
+              <button id="refreshAuthBtn" type="button">Refresh auth</button>
+              <button id="freshLoginBtn" type="button">Fresh login</button>
+              <button id="runNowBtn" type="button" class="primary">Start run</button>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <h2>Auth Status</h2>
+              <button id="authStatusBtn" type="button">Check</button>
+            </div>
+            <pre id="authStatus">{}</pre>
+          </section>
+
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Slots</h2>
+              <button id="slotsBtn" type="button">Generate slots</button>
+            </div>
+            <pre id="preview">{}</pre>
+          </section>
+
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Run Result</h2>
+            </div>
+            <pre id="runResult">Nog geen run gestart.</pre>
+          </section>
+        </section>
+      </section>
+
+      <section id="configTab" class="tab-page">
+        <section class="grid">
+          <form id="configForm" class="panel">
+            <div class="section-head">
+              <h2>Account</h2>
+            </div>
+            <label>
+              Username
+              <input id="username" autocomplete="username" type="text">
+            </label>
+            <label>
+              Password
+              <input id="password" autocomplete="current-password" type="password" placeholder="Leave empty to keep current password">
+            </label>
+            <label>
+              Device ID
+              <input id="deviceId" type="text">
+            </label>
+            <label>
+              Signature
+              <select id="signatureMode">
+                <option value="davidlloyd_v1">davidlloyd_v1</option>
+                <option value="method_path_timestamp_body">method_path_timestamp_body</option>
+                <option value="timestamp_body">timestamp_body</option>
+                <option value="timestamp_method_path_body">timestamp_method_path_body</option>
+              </select>
+            </label>
+          </form>
+
+          <section class="panel">
+            <div class="section-head">
+              <h2>Timing</h2>
+            </div>
+            <div class="inline">
+              <label>
+                Prep
+                <input id="prepTime" type="time" step="1">
+              </label>
+              <label>
+                Booking
+                <input id="bookingTime" type="time" step="1">
+              </label>
+            </div>
+            <div class="inline">
+              <label>
+                Days ahead
+                <input id="daysAhead" type="number" min="0">
+              </label>
+              <label>
+                Club ID
+                <input id="clubId" type="number" min="1">
+              </label>
+              <label>
+                Sports package
+                <input id="sportsPackageId" type="number" min="1">
+              </label>
+            </div>
+            <label class="check">
+              <input id="fallbackToAny" type="checkbox">
+              Fallback to any available court
+            </label>
+          </section>
+
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Booking Rules</h2>
+              <button id="addRuleBtn" type="button">Add rule</button>
+            </div>
+            <div id="rules"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <h2>Members</h2>
+              <button id="addMemberBtn" type="button">Add</button>
+            </div>
+            <div id="members"></div>
+          </section>
+
+          <section class="panel">
+            <div class="section-head">
+              <h2>Courts & Players</h2>
+            </div>
+            <label>
+              Preferred courts
+              <input id="preferredCourts" type="text" placeholder="737381, 737383">
+            </label>
+            <label>
+              Always add player IDs
+              <textarea id="alwaysAddPlayers" rows="5" placeholder="One encoded contact id per line"></textarea>
+            </label>
+          </section>
+        </section>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

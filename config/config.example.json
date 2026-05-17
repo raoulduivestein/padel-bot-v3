@@ -1,0 +1,44 @@
+{
+  "username": "+31644718872",
+  "password": "Duives01!",
+  "device_id": "3612c72cd89cad06",
+  "user_agent": "OneApp/150.0.3 (co.uk.davidlloyd.mobileapp; build:515117598; Android SDK 36) OkHttp/4.12.0",
+  "okta_user_agent": "okta-oidc-android/36 com.okta.oidc/1.1.0",
+  "okta_authn_user_agent": "okta-sdk-java/2.0.0 java/0 Linux/6.6.66-android15-8-gd0c43a640eab-ab13812146",
+  "client_id": "0oa3n4dj2s9UuXIRt417",
+  "redirect_uri": "uk.co.davidlloyd.mobile-app:/login",
+  "scope": "openid profile offline_access verified",
+  "signature_mode": "davidlloyd_v1",
+  "padel": {
+    "run_time": {
+      "prep": "07:59:55",
+      "booking": "08:00:00"
+    },
+    "club_id": 94,
+    "sports_package_id": 63,
+    "days_ahead": 6,
+    "members": [
+      {
+        "member_id": "bUpDTmkxR2kwMDZWNUk2SVQ5QithUQ==",
+        "name": "Raoul"
+      },
+      {
+        "member_id": "ZktCelEvaGFZRStuaW9kNUE0cytpdw==",
+        "name": "Senn"
+      }
+    ],
+    "always_add_player_ids": [
+      "SHlQK3EvQVU3VXk4QTFraXN1WWoxdw=="
+    ],
+    "preferred_courts": [737381, 737383, 737385],
+    "fallback_to_any": true,
+    "booking_rules": [
+      {"day": "monday", "times": ["21:00"], "duration": 2},
+      {"day": "tuesday", "times": ["20:00"], "duration": 2},
+      {"day": "wednesday", "times": ["20:00", "08:00"], "duration": 2},
+      {"day": "thursday", "times": ["20:00"], "duration": 2},
+      {"day": "friday", "times": ["21:00"], "duration": 2},
+      {"day": "saturday", "times": ["10:00"], "duration": 2}
+    ]
+  }
+}

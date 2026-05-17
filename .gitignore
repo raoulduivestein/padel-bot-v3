@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+config/config.json
+state/
+*.log

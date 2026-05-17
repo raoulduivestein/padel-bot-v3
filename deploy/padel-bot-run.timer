@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Padel Bot daily before booking window
+
+[Timer]
+OnCalendar=*-*-* 07:55:00
+Persistent=true
+Unit=padel-bot-run.service
+
+[Install]
+WantedBy=timers.target
