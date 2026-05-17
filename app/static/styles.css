@@ -210,7 +210,7 @@ button:hover {
 
 .row {
   display: grid;
-  grid-template-columns: 1fr 1.5fr 92px 40px;
+  grid-template-columns: 1fr 1.3fr 92px 1.5fr 40px;
   gap: 10px;
   align-items: end;
   margin-bottom: 10px;
@@ -218,6 +218,71 @@ button:hover {
 
 .member-row {
   grid-template-columns: 1fr 2fr 40px;
+}
+
+.rule-row {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.rule-fields {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 92px auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.rule-player-area {
+  display: grid;
+  gap: 8px;
+}
+
+.rule-player-area h3,
+.subhead {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.player-chip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.rule-row .player-chip {
+  background: #fff;
+}
+
+.player-chip strong,
+.player-chip code {
+  display: block;
+}
+
+.player-chip code {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.inline-player-search {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-top: 10px;
 }
 
 .run-summary {
@@ -259,6 +324,106 @@ pre {
   padding: 12px;
 }
 
+.history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.booking-list {
+  display: grid;
+  gap: 8px;
+}
+
+.search-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.8fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.player-results {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.player-result {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(260px, 1.2fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.player-result strong,
+.player-result span,
+.player-result code {
+  display: block;
+}
+
+.player-result span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.player-result code {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.history-item,
+.booking-item {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.history-item summary,
+.booking-item summary {
+  display: grid;
+  grid-template-columns: 14px 170px 70px 1fr;
+  gap: 10px;
+  align-items: center;
+  cursor: pointer;
+  padding: 11px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.booking-item summary {
+  grid-template-columns: 1.4fr 1fr 1fr;
+}
+
+.history-item summary strong,
+.booking-item summary strong {
+  color: var(--text);
+}
+
+.history-item pre,
+.booking-item pre {
+  margin: 0 11px 11px;
+  max-height: 320px;
+}
+
+.status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--danger);
+}
+
+.history-item.success .status-dot {
+  background: var(--accent);
+}
+
+.empty {
+  padding: 10px 0;
+}
+
 @media (max-width: 760px) {
   .topbar,
   .inline {
@@ -272,7 +437,14 @@ pre {
 
   .row,
   .member-row,
-  .run-summary {
+  .rule-fields,
+  .run-summary,
+  .history-item summary,
+  .booking-item summary,
+  .search-grid,
+  .player-result,
+  .player-chip,
+  .inline-player-search {
     grid-template-columns: 1fr;
   }
 }

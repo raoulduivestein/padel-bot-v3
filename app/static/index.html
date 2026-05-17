@@ -21,6 +21,8 @@
 
       <nav class="tabs" aria-label="Main sections">
         <button class="tab active" data-tab="run" type="button">Run</button>
+        <button class="tab" data-tab="runs" type="button">Runs</button>
+        <button class="tab" data-tab="bookings" type="button">Bookings</button>
         <button class="tab" data-tab="config" type="button">Config</button>
       </nav>
 
@@ -76,6 +78,30 @@
               <h2>Run Result</h2>
             </div>
             <pre id="runResult">Nog geen run gestart.</pre>
+          </section>
+        </section>
+      </section>
+
+      <section id="runsTab" class="tab-page">
+        <section class="grid">
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Run History</h2>
+              <button id="runHistoryBtn" type="button">Refresh</button>
+            </div>
+            <div id="runHistory" class="history-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section id="bookingsTab" class="tab-page">
+        <section class="grid">
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Bookings</h2>
+              <button id="bookingsRefreshBtn" type="button">Refresh</button>
+            </div>
+            <div id="bookingsList" class="booking-list"></div>
           </section>
         </section>
       </section>
@@ -154,9 +180,9 @@
           <section class="panel">
             <div class="section-head">
               <h2>Members</h2>
-              <button id="addMemberBtn" type="button">Add</button>
             </div>
             <div id="members"></div>
+            <div id="memberSearch"></div>
           </section>
 
           <section class="panel">
@@ -167,10 +193,9 @@
               Preferred courts
               <input id="preferredCourts" type="text" placeholder="737381, 737383">
             </label>
-            <label>
-              Always add player IDs
-              <textarea id="alwaysAddPlayers" rows="5" placeholder="One encoded contact id per line"></textarea>
-            </label>
+            <h2 class="subhead">Always add players</h2>
+            <div id="alwaysPlayers"></div>
+            <div id="alwaysPlayerSearch"></div>
           </section>
         </section>
       </section>

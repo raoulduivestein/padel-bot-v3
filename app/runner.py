@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from app.config import load_config
 from app.davidlloyd_client import DavidLloydClient, DavidLloydError
 from app.padel import PadelBookingService
+from app.run_history import append_run_history
 
 
 def parse_time(value: str) -> tuple[int, int, int]:
@@ -69,9 +70,16 @@ def main() -> int:
     parser.add_argument("--wait", action="store_true", help="Wait for config.padel.run_time before booking.")
     args = parser.parse_args()
 
-    result = run_once(attempts=args.attempts, wait=args.wait)
-    print(json.dumps(result, indent=2))
-    return 0 if result.get("ok") else 1
+    attempts = args.attempts if args.attempts is not None else 10
+    try:
+        result = run_once(attempts=args.attempts, wait=args.wait)
+        append_run_history(source="timer" if args.wait else "cli", attempts=attempts, result=result)
+        print(json.dumps(result, indent=2))
+        return 0 if result.get("ok") else 1
+    except Exception as exc:
+        entry = append_run_history(source="timer" if args.wait else "cli", attempts=attempts, error=exc)
+        print(json.dumps(entry, indent=2))
+        return 1
 
 
 if __name__ == "__main__":

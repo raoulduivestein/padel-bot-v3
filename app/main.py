@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, ValidationError
 from app.config import ROOT, AppConfig, load_config, write_config
 from app.davidlloyd_client import DavidLloydClient, DavidLloydError
 from app.padel import PadelBookingService, Slot
+from app.run_history import append_run_history, read_run_history
 
 
 app = FastAPI(title="David Lloyd Login Backend", version="0.1.0")
@@ -171,6 +172,65 @@ def membership_status() -> dict:
         raise handle_error(exc) from exc
 
 
+def normalize_booking(booking: dict[str, Any]) -> dict[str, Any]:
+    details = booking.get("details") or {}
+    players = details.get("players") or []
+    return {
+        "date": booking.get("date"),
+        "startTime": booking.get("startTime"),
+        "duration": booking.get("duration"),
+        "status": booking.get("status"),
+        "clubName": booking.get("clubName") or details.get("clubName"),
+        "activityName": booking.get("activityName") or details.get("activityName"),
+        "courtId": details.get("courtId"),
+        "encodedBookingReference": booking.get("encodedBookingReference"),
+        "players": [
+            {
+                "name": player.get("fullName") or player.get("name"),
+                "encodedContactId": player.get("encodedContactId"),
+            }
+            for player in players
+        ],
+        "raw": booking,
+    }
+
+
+@app.get("/padel/bookings")
+def padel_bookings() -> dict:
+    try:
+        data = client().bookings()
+        bookings = data.get("bookings", []) if isinstance(data, dict) else []
+        return {
+            "bookings": [normalize_booking(booking) for booking in bookings],
+            "raw": data,
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except DavidLloydError as exc:
+        raise handle_error(exc) from exc
+
+
+@app.get("/padel/players/search")
+def search_players(q: str) -> dict:
+    if len(q.strip()) < 2:
+        raise HTTPException(status_code=400, detail="Search query must be at least 2 characters")
+    try:
+        data = client().search_players(q.strip())
+        return {
+            "players": data.get("possiblePlayers", []) if isinstance(data, dict) else [],
+            "raw": data,
+        }
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except DavidLloydError as exc:
+        raise handle_error(exc) from exc
+
+
+@app.get("/players/search")
+def search_players_alias(q: str) -> dict:
+    return search_players(q)
+
+
 @app.get("/padel/config")
 def padel_config() -> dict:
     try:
@@ -201,13 +261,21 @@ def padel_availability(date: str, member_id: str | None = None) -> dict:
 
 @app.post("/padel/book-generated")
 def padel_book_generated(payload: BookGeneratedRequest | None = None) -> dict:
+    request = payload or BookGeneratedRequest()
     try:
-        request = payload or BookGeneratedRequest()
-        return padel_service().book_generated_slots(attempts=request.attempts)
+        result = padel_service().book_generated_slots(attempts=request.attempts)
+        append_run_history(source="web", attempts=request.attempts, result=result)
+        return result
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DavidLloydError as exc:
+        append_run_history(source="web", attempts=request.attempts, error=exc)
         raise handle_error(exc) from exc
+
+
+@app.get("/padel/runs")
+def padel_runs(limit: int = 50) -> dict:
+    return {"runs": read_run_history(limit=max(1, min(limit, 200)))}
 
 
 @app.post("/padel/book-slot")

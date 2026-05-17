@@ -114,6 +114,12 @@ class DavidLloydClient:
     def membership_status(self) -> dict:
         return self.mobile_get("/members/me/membership-status")
 
+    def bookings(self) -> dict:
+        return self.mobile_get("/members/me/bookings?include-others-i-can-book-for")
+
+    def search_players(self, search: str) -> dict:
+        return self.mobile_get("/players", params={"search": search})
+
     def mobile_get(self, path: str, *, params: dict[str, Any] | None = None) -> dict:
         state = read_state()
         self._ensure_valid_auth_state(state)

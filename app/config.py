@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +30,7 @@ class BookingRule(BaseModel):
     day: str
     times: list[str]
     duration: int = Field(ge=1, le=4)
+    player_ids: list[str] = []
 
 
 class PadelConfig(BaseModel):
@@ -38,6 +39,7 @@ class PadelConfig(BaseModel):
     sports_package_id: int
     days_ahead: int = Field(ge=0)
     members: list[MemberConfig]
+    known_players: dict[str, str] = {}
     always_add_player_ids: list[str] = []
     preferred_courts: list[int] = []
     fallback_to_any: bool = True
@@ -81,6 +83,38 @@ class AppConfig(BaseModel):
     scope: str
     signature_mode: SignatureMode = "davidlloyd_v1"
     padel: PadelConfig = Field(default_factory=default_padel_config)
+
+    @model_validator(mode="after")
+    def validate_rule_players(self) -> "AppConfig":
+        member_ids = {member.member_id for member in self.padel.members}
+        always_ids = set(self.padel.always_add_player_ids)
+        reserved = member_ids | always_ids
+
+        duplicate_always = sorted(member_ids.intersection(always_ids))
+        if duplicate_always:
+            raise ValueError(
+                "always_add_player_ids contains players already configured as members: "
+                f"{', '.join(duplicate_always)}"
+            )
+
+        for rule in self.padel.booking_rules:
+            duplicates = [player_id for player_id in rule.player_ids if player_id in reserved]
+            if duplicates:
+                raise ValueError(
+                    f"Booking rule {rule.day} has player_ids already configured as members or always_add_player_ids: "
+                    f"{', '.join(duplicates)}"
+                )
+
+            seen: set[str] = set()
+            repeated = []
+            for player_id in rule.player_ids:
+                if player_id in seen:
+                    repeated.append(player_id)
+                seen.add(player_id)
+            if repeated:
+                raise ValueError(f"Booking rule {rule.day} has duplicate player_ids: {', '.join(repeated)}")
+
+        return self
 
 
 def load_config(path: Path = CONFIG_PATH) -> AppConfig:

@@ -13,6 +13,7 @@ from app.davidlloyd_client import DavidLloydClient, DavidLloydError
 class Slot:
     date: str
     time: str
+    player_ids: list[str] | None = None
 
 
 def generate_slots(config: PadelConfig) -> list[Slot]:
@@ -30,6 +31,7 @@ def generate_slots(config: PadelConfig) -> list[Slot]:
                     Slot(
                         date=target_date.strftime("%Y-%m-%d"),
                         time=f"{hour + offset:02d}:{minute:02d}",
+                        player_ids=list(rule.player_ids),
                     )
                 )
 
@@ -148,7 +150,7 @@ class PadelBookingService:
         if not booking_ref:
             raise DavidLloydError("Booking create response did not contain encodedBookingReference", body=created)
 
-        self.update_booking_players(booking_ref, member)
+        self.update_booking_players(booking_ref, member, slot.player_ids or [])
 
         confirmed = self.client.mobile_post(
             f"/clubs/{self.config.club_id}/members/me/bookings/{booking_ref}/confirmCourt?return-booking=true",
@@ -164,14 +166,14 @@ class PadelBookingService:
             "booking": confirmed,
         }
 
-    def update_booking_players(self, booking_ref: str, member: dict[str, str]) -> dict:
-        all_player_ids = [member["member_id"], *self.build_booking_player_ids(member)]
+    def update_booking_players(self, booking_ref: str, member: dict[str, str], rule_player_ids: list[str]) -> dict:
+        all_player_ids = [member["member_id"], *self.build_booking_player_ids(member, rule_player_ids)]
         return self.client.mobile_put(
             f"/clubs/{self.config.club_id}/members/me/bookings/{booking_ref}/players?return-booking=true",
             payload={"playersEncodedContactIds": all_player_ids},
         )
 
-    def build_booking_player_ids(self, booked_member: dict[str, str]) -> list[str]:
+    def build_booking_player_ids(self, booked_member: dict[str, str], rule_player_ids: list[str]) -> list[str]:
         booked_member_id = booked_member["member_id"]
         seen = {booked_member_id}
         player_ids: list[str] = []
@@ -182,7 +184,7 @@ class PadelBookingService:
             if member.member_id != booked_member_id
         ]
 
-        for player_id in [*configured_ids, *self.config.always_add_player_ids]:
+        for player_id in [*configured_ids, *self.config.always_add_player_ids, *rule_player_ids]:
             if player_id and player_id not in seen:
                 player_ids.append(player_id)
                 seen.add(player_id)

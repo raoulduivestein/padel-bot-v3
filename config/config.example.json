@@ -27,18 +27,22 @@
         "name": "Senn"
       }
     ],
+    "known_players": {
+      "bUpDTmkxR2kwMDZWNUk2SVQ5QithUQ==": "Raoul",
+      "ZktCelEvaGFZRStuaW9kNUE0cytpdw==": "Senn"
+    },
     "always_add_player_ids": [
       "SHlQK3EvQVU3VXk4QTFraXN1WWoxdw=="
     ],
     "preferred_courts": [737381, 737383, 737385],
     "fallback_to_any": true,
     "booking_rules": [
-      {"day": "monday", "times": ["21:00"], "duration": 2},
-      {"day": "tuesday", "times": ["20:00"], "duration": 2},
-      {"day": "wednesday", "times": ["20:00", "08:00"], "duration": 2},
-      {"day": "thursday", "times": ["20:00"], "duration": 2},
-      {"day": "friday", "times": ["21:00"], "duration": 2},
-      {"day": "saturday", "times": ["10:00"], "duration": 2}
+      {"day": "monday", "times": ["21:00"], "duration": 2, "player_ids": []},
+      {"day": "tuesday", "times": ["20:00"], "duration": 2, "player_ids": []},
+      {"day": "wednesday", "times": ["20:00", "08:00"], "duration": 2, "player_ids": []},
+      {"day": "thursday", "times": ["20:00"], "duration": 2, "player_ids": []},
+      {"day": "friday", "times": ["21:00"], "duration": 2, "player_ids": []},
+      {"day": "saturday", "times": ["10:00"], "duration": 2, "player_ids": []}
     ]
   }
 }
