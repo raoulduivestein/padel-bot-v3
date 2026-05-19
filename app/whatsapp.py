@@ -115,6 +115,7 @@ class WhatsAppManager:
         options.add_argument("--disable-extensions")
         options.add_argument("--disable-notifications")
         options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--disable-features=UseDBus")
         options.add_argument("--password-store=basic")
         options.add_argument("--use-mock-keychain")
         options.add_argument("--remote-debugging-port=0")

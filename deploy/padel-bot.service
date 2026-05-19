@@ -11,6 +11,7 @@ WorkingDirectory=/opt/padel-bot
 Environment=PYTHONUNBUFFERED=1
 Environment=HOME=/home/padelbot
 Environment=XDG_RUNTIME_DIR=/tmp/padelbot-runtime
+Environment=DBUS_SESSION_BUS_ADDRESS=
 ExecStartPre=/bin/mkdir -p /tmp/padelbot-runtime
 ExecStartPre=/bin/chown padelbot:padelbot /tmp/padelbot-runtime
 ExecStartPre=/bin/chmod 700 /tmp/padelbot-runtime
