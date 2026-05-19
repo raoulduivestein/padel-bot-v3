@@ -66,6 +66,10 @@ pre {
   color: var(--muted);
 }
 
+.help {
+  font-size: 12px;
+}
+
 .actions,
 .inline,
 .section-head {
@@ -331,7 +335,224 @@ pre {
 
 .booking-list {
   display: grid;
+  gap: 12px;
+}
+
+.invite-list {
+  display: grid;
+  gap: 10px;
+}
+
+.invite-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.invite-item strong,
+.invite-item span,
+.invite-item code {
+  display: block;
+}
+
+.invite-item span,
+.invite-item code {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.invite-status {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text) !important;
+  padding: 6px 10px;
+  margin: 0 !important;
+}
+
+.invite-actions {
+  display: flex;
   gap: 8px;
+  align-items: center;
+}
+
+.invite-actions a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.booking-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.booking-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfd;
+  padding: 14px;
+}
+
+.booking-card-head strong,
+.booking-card-head span {
+  display: block;
+}
+
+.booking-card-head strong {
+  color: var(--text);
+  font-size: 16px;
+}
+
+.booking-card-head span {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.booking-metrics {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.booking-metrics span {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  padding: 5px 9px;
+}
+
+.booking-editor {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.booking-players {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.booking-players .player-chip {
+  margin: 0;
+}
+
+.booking-player-search .player-results {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.booking-invite {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  padding: 10px;
+}
+
+.booking-invite select {
+  margin: 0;
+}
+
+.booking-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.booking-raw {
+  flex: 1;
+  text-align: right;
+}
+
+.booking-raw summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.booking-raw pre {
+  margin-top: 10px;
+  text-align: left;
+}
+
+.phonebook-tools {
+  max-width: 360px;
+}
+
+.qr-image {
+  display: block;
+  width: min(320px, 100%);
+  max-height: 320px;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+}
+
+.qr-error {
+  min-height: 0;
+  margin-top: 10px;
+  color: var(--danger);
+}
+
+.phonebook-list {
+  display: grid;
+  gap: 10px;
+}
+
+.phonebook-item {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) minmax(320px, 1.5fr);
+  gap: 12px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  padding: 12px;
+}
+
+.phonebook-title strong,
+.phonebook-title span,
+.phonebook-title code {
+  display: block;
+}
+
+.phonebook-title span,
+.phonebook-title code {
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.phonebook-title code {
+  overflow-wrap: anywhere;
+}
+
+.phonebook-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .search-grid {
@@ -426,7 +647,9 @@ pre {
 
 @media (max-width: 760px) {
   .topbar,
-  .inline {
+  .inline,
+  .booking-card-head,
+  .booking-actions {
     align-items: stretch;
     flex-direction: column;
   }
@@ -442,6 +665,11 @@ pre {
   .history-item summary,
   .booking-item summary,
   .search-grid,
+  .phonebook-item,
+  .phonebook-fields,
+  .booking-invite,
+  .booking-players,
+  .invite-item,
   .player-result,
   .player-chip,
   .inline-player-search {

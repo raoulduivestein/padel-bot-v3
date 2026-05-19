@@ -1,18 +1,25 @@
 from __future__ import annotations
 
+import concurrent.futures
 import logging
+import re
+from html import escape
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import Request
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import ROOT, AppConfig, load_config, write_config
 from app.davidlloyd_client import DavidLloydClient, DavidLloydError
+from app.invites import cancel_invite, create_invite, get_invite, read_invites, update_invite
 from app.padel import PadelBookingService, Slot
+from app.phonebook import read_phonebook, sync_booking_players, sync_config_players, update_entry, upsert_player
 from app.run_history import append_run_history, read_run_history
+from app.whatsapp import WhatsAppError, whatsapp_manager
 
 
 app = FastAPI(title="David Lloyd Login Backend", version="0.1.0")
@@ -31,6 +38,7 @@ def padel_service() -> PadelBookingService:
 
 class BookGeneratedRequest(BaseModel):
     attempts: int = Field(default=1, ge=1, le=20)
+    fresh_login: bool = True
 
 
 class BookSlotRequest(BaseModel):
@@ -40,12 +48,58 @@ class BookSlotRequest(BaseModel):
     court_id: int | None = None
 
 
+class UpdateBookingPlayersRequest(BaseModel):
+    encodedBookingReference: str
+    playersEncodedContactIds: list[str] = Field(max_length=4)
+
+
+class WhatsAppSendRequest(BaseModel):
+    phone: str
+    message: str
+
+
+class InvitePlayer(BaseModel):
+    encodedContactId: str
+    fullName: str | None = None
+    phone: str | None = None
+    memberReferenceNumber: str | None = None
+    homeClubSiteId: int | None = None
+
+
+class SendInviteRequest(BaseModel):
+    encodedBookingReference: str
+    booking: dict[str, Any]
+    player: InvitePlayer
+
+
+ACTIVE_INVITE_STATUSES = {"pending", "sent", "send_failed"}
+
+
 class ConfigUpdateRequest(BaseModel):
     username: str
     password: str | None = None
     device_id: str
     signature_mode: str
     padel: dict[str, Any]
+
+
+class InviteMessagesUpdateRequest(BaseModel):
+    invite_message_templates: list[str]
+
+
+class PhonebookUpsertRequest(BaseModel):
+    encodedContactId: str
+    fullName: str | None = None
+    memberReferenceNumber: str | None = None
+    homeClubSiteId: int | None = None
+    source: str = "tool"
+
+
+class PhonebookUpdateRequest(BaseModel):
+    encodedContactId: str
+    fullName: str | None = None
+    phone: str | None = None
+    notes: str | None = None
 
 
 def handle_error(exc: DavidLloydError) -> HTTPException:
@@ -109,10 +163,32 @@ def update_api_config(payload: ConfigUpdateRequest) -> dict:
 
         updated = AppConfig.model_validate(merged)
         write_config(updated)
+        sync_config_players(updated)
         response = updated.model_dump()
         response["password"] = ""
         response["password_is_set"] = bool(updated.password)
         return {"ok": True, "config": response}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/invite-messages")
+def update_invite_messages(payload: InviteMessagesUpdateRequest) -> dict:
+    try:
+        current = load_config()
+        templates = [template.strip() for template in payload.invite_message_templates if template.strip()]
+        if not templates:
+            raise HTTPException(status_code=400, detail="At least one invite message is required")
+        merged = current.model_dump()
+        merged["padel"]["invite_message_templates"] = templates
+        merged["padel"]["invite_message_template"] = templates[0]
+        updated = AppConfig.model_validate(merged)
+        write_config(updated)
+        return {
+            "ok": True,
+            "invite_message_template": updated.padel.invite_message_template,
+            "invite_message_templates": updated.padel.invite_message_templates,
+        }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -188,6 +264,9 @@ def normalize_booking(booking: dict[str, Any]) -> dict[str, Any]:
             {
                 "name": player.get("fullName") or player.get("name"),
                 "encodedContactId": player.get("encodedContactId"),
+                "memberReferenceNumber": player.get("memberReferenceNumber"),
+                "homeClubSiteId": player.get("homeClubSiteId"),
+                "paymentRequiredForCourtBookings": player.get("paymentRequiredForCourtBookings"),
             }
             for player in players
         ],
@@ -195,11 +274,138 @@ def normalize_booking(booking: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def update_booking_players_with_ids(encoded_booking_reference: str, player_ids: list[str]) -> dict:
+    if len(player_ids) > 4:
+        raise HTTPException(status_code=400, detail="A booking can have at most 4 players")
+    if len(set(player_ids)) != len(player_ids):
+        raise HTTPException(status_code=400, detail="Duplicate players are not allowed")
+
+    cfg = load_config()
+    booking_reference = quote(encoded_booking_reference, safe="")
+    data = DavidLloydClient(cfg).mobile_put(
+        f"/clubs/{cfg.padel.club_id}/members/me/bookings/"
+        f"{booking_reference}/players?return-booking=true",
+        payload={"playersEncodedContactIds": player_ids},
+    )
+    returned_booking = data.get("booking") if isinstance(data, dict) else None
+    if isinstance(returned_booking, dict):
+        sync_booking_players([returned_booking])
+        return {"ok": True, "booking": normalize_booking(returned_booking), "raw": data}
+    return {"ok": True, "raw": data}
+
+
+def find_booking(encoded_booking_reference: str) -> dict[str, Any] | None:
+    data = client().bookings()
+    bookings = data.get("bookings", []) if isinstance(data, dict) else []
+    for booking in bookings:
+        if booking.get("encodedBookingReference") == encoded_booking_reference:
+            return normalize_booking(booking)
+    return None
+
+
+def active_invite(invite: dict[str, Any]) -> bool:
+    return invite.get("status") in ACTIVE_INVITE_STATUSES
+
+
+def render_invite_page(invite: dict[str, Any], *, message: str | None = None, status_code: int = 200) -> HTMLResponse:
+    booking = invite.get("booking") or {}
+    player = invite.get("player") or {}
+    status = str(invite.get("status") or "")
+    can_respond = active_invite(invite)
+    action_html = (
+        f"""
+        <form method="post" action="/invite/{invite["token"]}/accept"><button class="primary" type="submit">Accepteren</button></form>
+        <form method="post" action="/invite/{invite["token"]}/reject"><button type="submit">Weigeren</button></form>
+        """
+        if can_respond
+        else ""
+    )
+    notice = f"<p class='notice'>{escape(message)}</p>" if message else ""
+    body = f"""
+    <!doctype html>
+    <html lang="nl">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Padel uitnodiging</title>
+        <style>
+          :root {{ --bg:#f6f7f8; --surface:#fff; --line:#d8dde3; --text:#171a1f; --muted:#66707f; --accent:#0f766e; }}
+          * {{ box-sizing: border-box; }}
+          body {{ margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+          main {{ width: min(560px, calc(100% - 32px)); margin: 48px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }}
+          h1 {{ margin: 0 0 16px; font-size: 26px; line-height: 1.15; }}
+          .meta {{ display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 14px; margin-bottom: 16px; }}
+          .meta span {{ display: block; color: var(--muted); font-size: 13px; }}
+          .meta strong {{ display: block; margin-top: 3px; color: var(--text); }}
+          p {{ color: var(--muted); line-height: 1.5; }}
+          .notice {{ color: var(--text); }}
+          form {{ display: inline-block; margin-right: 8px; }}
+          button {{ border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }}
+          .primary {{ background: var(--accent); border-color: var(--accent); color: white; }}
+          .status {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fff; color: var(--text); }}
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Padel uitnodiging</h1>
+          <div class="meta">
+            <div><span>Speler</span><strong>{escape(str(player.get("fullName") or "-"))}</strong></div>
+            <div><span>Datum en tijd</span><strong>{escape(str(booking.get("date") or "-"))} om {escape(str(booking.get("startTime") or "-"))}</strong></div>
+            <div><span>Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))}</strong></div>
+            <div><span>Status</span><strong class="status">{escape(status)}</strong></div>
+          </div>
+          {notice}
+          {action_html}
+        </main>
+      </body>
+    </html>
+    """
+    return HTMLResponse(body, status_code=status_code)
+
+
+def invite_message_templates(config: AppConfig) -> list[str]:
+    templates = [template.strip() for template in config.padel.invite_message_templates if template.strip()]
+    if templates:
+        return templates
+    split_templates = [
+        template.strip()
+        for template in re.split(r"\r?\n---\r?\n", config.padel.invite_message_template)
+        if template.strip()
+    ]
+    return split_templates or [config.padel.invite_message_template]
+
+
+def format_invite_message(template: str, *, booking: dict[str, Any], player: dict[str, Any], invite_url: str) -> str:
+    values = {
+        "player_name": player.get("fullName") or "",
+        "date": booking.get("date") or "-",
+        "time": booking.get("startTime") or "-",
+        "club_name": booking.get("clubName") or "David Lloyd",
+        "court_id": booking.get("courtId") or "-",
+        "activity_name": booking.get("activityName") or "Padel",
+        "invite_url": invite_url,
+    }
+    try:
+        return template.format(**values)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"Unknown invite template placeholder: {exc}") from exc
+
+
+def normalize_phone_digits(phone: str | None) -> str:
+    digits = re.sub(r"\D+", "", phone or "")
+    if digits.startswith("00"):
+        digits = digits[2:]
+    if digits.startswith("0"):
+        digits = f"31{digits[1:]}"
+    return digits
+
+
 @app.get("/padel/bookings")
 def padel_bookings() -> dict:
     try:
         data = client().bookings()
         bookings = data.get("bookings", []) if isinstance(data, dict) else []
+        sync_booking_players(bookings)
         return {
             "bookings": [normalize_booking(booking) for booking in bookings],
             "raw": data,
@@ -208,6 +414,152 @@ def padel_bookings() -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DavidLloydError as exc:
         raise handle_error(exc) from exc
+
+
+@app.put("/padel/bookings/players")
+def update_booking_players(payload: UpdateBookingPlayersRequest) -> dict:
+    try:
+        return update_booking_players_with_ids(
+            payload.encodedBookingReference,
+            payload.playersEncodedContactIds,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except DavidLloydError as exc:
+        raise handle_error(exc) from exc
+
+
+@app.get("/whatsapp/status")
+def whatsapp_status() -> dict:
+    try:
+        return whatsapp_manager.status()
+    except (WhatsAppError, concurrent.futures.TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/whatsapp/debug")
+def whatsapp_debug() -> dict:
+    try:
+        return whatsapp_manager.debug()
+    except (WhatsAppError, concurrent.futures.TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/whatsapp/reload")
+def whatsapp_reload() -> dict:
+    try:
+        return whatsapp_manager.reload()
+    except (WhatsAppError, concurrent.futures.TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/whatsapp/qr")
+def whatsapp_qr() -> Response:
+    try:
+        return Response(content=whatsapp_manager.qr_screenshot(), media_type="image/png")
+    except (WhatsAppError, concurrent.futures.TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/whatsapp/send")
+def whatsapp_send(payload: WhatsAppSendRequest) -> dict:
+    try:
+        return whatsapp_manager.send_message(phone=payload.phone, message=payload.message)
+    except (WhatsAppError, concurrent.futures.TimeoutError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/bookings/invites/send")
+def send_booking_invite(payload: SendInviteRequest, request: Request) -> dict:
+    player = payload.player.model_dump()
+    if not player.get("phone"):
+        raise HTTPException(status_code=400, detail="Player has no phone number")
+    if len(payload.booking.get("players") or []) >= 4:
+        raise HTTPException(status_code=400, detail="A booking with 4 players cannot receive more invites")
+    cfg = load_config()
+    invite = create_invite(
+        encoded_booking_reference=payload.encodedBookingReference,
+        player=player,
+        booking=payload.booking,
+    )
+    invite_url = str(request.url_for("invite_page", token=invite["token"]))
+    booking = invite["booking"]
+    messages = [
+        format_invite_message(template, booking=booking, player=player, invite_url=invite_url)
+        for template in invite_message_templates(cfg)
+    ]
+    try:
+        send_results = []
+        for message in messages:
+            send_results.append(whatsapp_manager.send_message(phone=player["phone"], message=message))
+    except (WhatsAppError, concurrent.futures.TimeoutError) as exc:
+        update_invite(invite["token"], status="send_failed", sendError=str(exc), messages=messages)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    update_invite(invite["token"], status="sent", messageCount=len(messages), messages=messages)
+    return {"ok": True, "invite": get_invite(invite["token"]), "whatsapp": send_results, "inviteUrl": invite_url}
+
+
+@app.get("/bookings/invites")
+def booking_invites() -> dict:
+    return {"invites": read_invites()}
+
+
+@app.post("/bookings/invites/{token}/cancel")
+def cancel_booking_invite(token: str) -> dict:
+    invite = get_invite(token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if invite.get("status") in {"accepted", "rejected", "cancelled"}:
+        return {"ok": True, "invite": invite}
+    return {"ok": True, "invite": cancel_invite(token)}
+
+
+@app.get("/invite/{token}", response_class=HTMLResponse)
+def invite_page(token: str) -> HTMLResponse:
+    invite = get_invite(token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    message = None if active_invite(invite) else "Deze uitnodiging is niet meer actief."
+    return render_invite_page(invite, message=message)
+
+
+@app.post("/invite/{token}/accept", response_class=HTMLResponse)
+def accept_invite(token: str) -> HTMLResponse:
+    invite = get_invite(token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if not active_invite(invite):
+        return render_invite_page(invite, message="Deze uitnodiging is al verwerkt of ingetrokken.", status_code=409)
+    player_id = (invite.get("player") or {}).get("encodedContactId")
+    if not player_id:
+        raise HTTPException(status_code=400, detail="Invite player has no encodedContactId")
+    try:
+        booking = find_booking(invite["encodedBookingReference"])
+        if booking is None:
+            raise HTTPException(status_code=404, detail="Booking not found")
+        player_ids = [player.get("encodedContactId") for player in booking.get("players", []) if player.get("encodedContactId")]
+        if len(player_ids) >= 4:
+            update_invite(token, status="full")
+            return render_invite_page(get_invite(token) or invite, message="Deze boeking zit al vol.", status_code=409)
+        if player_id not in player_ids:
+            player_ids.append(player_id)
+            update_booking_players_with_ids(invite["encodedBookingReference"], player_ids)
+        update_invite(token, status="accepted")
+        return render_invite_page(get_invite(token) or invite, message="Je bent toegevoegd aan de boeking.")
+    except DavidLloydError as exc:
+        raise handle_error(exc) from exc
+
+
+@app.post("/invite/{token}/reject", response_class=HTMLResponse)
+def reject_invite(token: str) -> HTMLResponse:
+    invite = get_invite(token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail="Invite not found")
+    if not active_invite(invite):
+        return render_invite_page(invite, message="Deze uitnodiging is al verwerkt of ingetrokken.", status_code=409)
+    update_invite(token, status="rejected")
+    return render_invite_page(get_invite(token) or invite, message="Je hebt de uitnodiging geweigerd.")
 
 
 @app.get("/padel/players/search")
@@ -229,6 +581,40 @@ def search_players(q: str) -> dict:
 @app.get("/players/search")
 def search_players_alias(q: str) -> dict:
     return search_players(q)
+
+
+@app.get("/phonebook")
+def phonebook() -> dict:
+    return {"players": read_phonebook()}
+
+
+@app.post("/phonebook/upsert")
+def phonebook_upsert(payload: PhonebookUpsertRequest) -> dict:
+    try:
+        entry = upsert_player(
+            encoded_contact_id=payload.encodedContactId,
+            full_name=payload.fullName,
+            member_reference_number=payload.memberReferenceNumber,
+            home_club_site_id=payload.homeClubSiteId,
+            source=payload.source,
+        )
+        return {"ok": True, "player": entry}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/phonebook")
+def phonebook_update(payload: PhonebookUpdateRequest) -> dict:
+    try:
+        entry = update_entry(
+            encoded_contact_id=payload.encodedContactId,
+            full_name=payload.fullName,
+            phone=payload.phone,
+            notes=payload.notes,
+        )
+        return {"ok": True, "player": entry}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/padel/config")
@@ -263,7 +649,10 @@ def padel_availability(date: str, member_id: str | None = None) -> dict:
 def padel_book_generated(payload: BookGeneratedRequest | None = None) -> dict:
     request = payload or BookGeneratedRequest()
     try:
-        result = padel_service().book_generated_slots(attempts=request.attempts)
+        service = padel_service()
+        if request.fresh_login:
+            service.client.login()
+        result = service.book_generated_slots(attempts=request.attempts)
         append_run_history(source="web", attempts=request.attempts, result=result)
         return result
     except FileNotFoundError as exc:

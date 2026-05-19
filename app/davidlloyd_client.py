@@ -217,6 +217,25 @@ class DavidLloydClient:
                 timeout=30,
             )
 
+        if response.status_code == 403 and "hmac_validation_failed" in body_text:
+            self._ensure_rsa_keypair(state, rotate=True)
+            self._refresh_hmac(state)
+            write_state(state)
+            return self.http.request(
+                method,
+                url,
+                headers=self._mobile_headers(
+                    state,
+                    signed=True,
+                    method=method,
+                    url=url,
+                    body=body,
+                    auth_token=state["access_token"],
+                ),
+                data=body if method.upper() != "GET" else None,
+                timeout=30,
+            )
+
         if response.status_code != 401:
             return response
 

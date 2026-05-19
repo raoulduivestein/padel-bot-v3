@@ -168,6 +168,11 @@ class PadelBookingService:
 
     def update_booking_players(self, booking_ref: str, member: dict[str, str], rule_player_ids: list[str]) -> dict:
         all_player_ids = [member["member_id"], *self.build_booking_player_ids(member, rule_player_ids)]
+        if len(all_player_ids) > 4:
+            raise DavidLloydError(
+                "A booking can have at most 4 players",
+                body={"playersEncodedContactIds": all_player_ids},
+            )
         return self.client.mobile_put(
             f"/clubs/{self.config.club_id}/members/me/bookings/{booking_ref}/players?return-booking=true",
             payload={"playersEncodedContactIds": all_player_ids},

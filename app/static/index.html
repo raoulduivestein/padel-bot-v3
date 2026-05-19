@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Padel Bot</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=20260518-1">
   </head>
   <body>
     <main class="shell">
@@ -23,6 +23,9 @@
         <button class="tab active" data-tab="run" type="button">Run</button>
         <button class="tab" data-tab="runs" type="button">Runs</button>
         <button class="tab" data-tab="bookings" type="button">Bookings</button>
+        <button class="tab" data-tab="invites" type="button">Invites</button>
+        <button class="tab" data-tab="phonebook" type="button">Phonebook</button>
+        <button class="tab" data-tab="whatsapp" type="button">WhatsApp</button>
         <button class="tab" data-tab="config" type="button">Config</button>
       </nav>
 
@@ -103,6 +106,67 @@
             </div>
             <div id="bookingsList" class="booking-list"></div>
           </section>
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Invites</h2>
+              <button id="invitesRefreshBtn" type="button">Refresh</button>
+            </div>
+            <div class="invite-list" data-invites-list></div>
+          </section>
+        </section>
+      </section>
+
+      <section id="invitesTab" class="tab-page">
+        <section class="grid">
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Invites</h2>
+              <button id="invitesTabRefreshBtn" type="button">Refresh</button>
+            </div>
+            <div class="invite-list" data-invites-list></div>
+          </section>
+        </section>
+      </section>
+
+      <section id="phonebookTab" class="tab-page">
+        <section class="grid">
+          <section class="panel wide">
+            <div class="section-head">
+              <h2>Phonebook</h2>
+              <button id="phonebookRefreshBtn" type="button">Refresh</button>
+            </div>
+            <div class="phonebook-tools">
+              <label>
+                Filter
+                <input id="phonebookFilter" type="search" placeholder="Search name, number or member id">
+              </label>
+            </div>
+            <div id="phonebookList" class="phonebook-list"></div>
+          </section>
+        </section>
+      </section>
+
+      <section id="whatsappTab" class="tab-page">
+        <section class="grid">
+          <section class="panel">
+            <div class="section-head">
+              <h2>WhatsApp Web</h2>
+              <div class="actions">
+                <button id="whatsappReloadBtn" type="button">Reload Web</button>
+                <button id="whatsappStatusBtn" type="button">Check</button>
+              </div>
+            </div>
+            <pre id="whatsappStatus">{}</pre>
+          </section>
+          <section class="panel">
+            <div class="section-head">
+              <h2>QR koppelen</h2>
+              <button id="whatsappQrBtn" type="button">Toon QR</button>
+            </div>
+            <p class="hint">De QR-code wordt uit de Selenium Chrome-sessie gehaald en hier getoond. Op de VPS werkt dit via xvfb.</p>
+            <img id="whatsappQr" class="qr-image" alt="WhatsApp QR screenshot">
+            <pre id="whatsappQrError" class="qr-error"></pre>
+          </section>
         </section>
       </section>
 
@@ -167,6 +231,14 @@
               <input id="fallbackToAny" type="checkbox">
               Fallback to any available court
             </label>
+            <label>
+              Invite messages
+              <textarea id="inviteMessageTemplates" rows="7"></textarea>
+            </label>
+            <div class="actions left">
+              <button id="saveInviteMessagesBtn" type="button">Save invite messages</button>
+            </div>
+            <p class="help">Separate multiple WhatsApp messages with a line containing only ---. Available placeholders: {player_name}, {date}, {time}, {club_name}, {court_id}, {activity_name}, {invite_url}</p>
           </section>
 
           <section class="panel wide">
@@ -200,6 +272,6 @@
         </section>
       </section>
     </main>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20260518-1"></script>
   </body>
 </html>

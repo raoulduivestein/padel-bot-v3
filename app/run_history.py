@@ -32,6 +32,12 @@ def append_run_history(
             "message": str(error),
             "traceback": traceback.format_exc(),
         }
+        status_code = getattr(error, "status_code", None)
+        body = getattr(error, "body", None)
+        if status_code is not None:
+            entry["error"]["upstream_status_code"] = status_code
+        if body is not None:
+            entry["error"]["upstream_body"] = body
 
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     with RUN_HISTORY_PATH.open("a", encoding="utf-8") as handle:

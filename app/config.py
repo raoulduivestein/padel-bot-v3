@@ -43,6 +43,11 @@ class PadelConfig(BaseModel):
     always_add_player_ids: list[str] = []
     preferred_courts: list[int] = []
     fallback_to_any: bool = True
+    invite_message_template: str = (
+        "Padel uitnodiging: {date} om {time} bij {club_name}.\n\n"
+        "Bevestig of weiger hier: {invite_url}"
+    )
+    invite_message_templates: list[str] = []
     booking_rules: list[BookingRule]
 
 
@@ -59,6 +64,14 @@ def default_padel_config() -> PadelConfig:
         always_add_player_ids=["SHlQK3EvQVU3VXk4QTFraXN1WWoxdw=="],
         preferred_courts=[737381, 737383, 737385],
         fallback_to_any=True,
+        invite_message_template=(
+            "Padel uitnodiging: {date} om {time} bij {club_name}.\n\n"
+            "Bevestig of weiger hier: {invite_url}"
+        ),
+        invite_message_templates=[
+            "Padel uitnodiging: {date} om {time} bij {club_name}.",
+            "{invite_url}",
+        ],
         booking_rules=[
             BookingRule(day="monday", times=["21:00"], duration=2),
             BookingRule(day="tuesday", times=["18:00"], duration=2),

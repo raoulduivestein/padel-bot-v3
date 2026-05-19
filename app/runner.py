@@ -7,7 +7,7 @@ import time
 from datetime import datetime, timedelta
 
 from app.config import load_config
-from app.davidlloyd_client import DavidLloydClient, DavidLloydError
+from app.davidlloyd_client import DavidLloydClient
 from app.padel import PadelBookingService
 from app.run_history import append_run_history
 
@@ -48,18 +48,10 @@ def run_once(*, attempts: int | None = None, wait: bool = False) -> dict:
         prep = next_datetime(config.padel.run_time.get("prep", "07:59:55"))
         booking = next_datetime(config.padel.run_time.get("booking", "08:00:00"))
         wait_until(prep)
-        try:
-            client.refresh_token()
-            client.refresh_hmac()
-        except DavidLloydError:
-            client.login()
+        client.login()
         wait_until(booking)
     else:
-        try:
-            client.refresh_token()
-            client.refresh_hmac()
-        except DavidLloydError:
-            client.login()
+        client.login()
 
     return service.book_generated_slots(attempts=run_attempts)
 

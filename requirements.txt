@@ -3,3 +3,4 @@ uvicorn[standard]==0.34.0
 requests==2.32.3
 cryptography==44.0.0
 pydantic==2.10.4
+selenium==4.27.1

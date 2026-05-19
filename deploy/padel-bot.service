@@ -9,7 +9,7 @@ User=padelbot
 Group=padelbot
 WorkingDirectory=/opt/padel-bot
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/padel-bot/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18018
+ExecStart=/usr/bin/xvfb-run -a --server-args=-screen\ 0\ 1280x900x24 /opt/padel-bot/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 18018
 Restart=always
 RestartSec=5
 

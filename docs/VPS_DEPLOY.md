@@ -6,7 +6,10 @@ Aanname: Ubuntu VPS, app in `/opt/padel-bot`, system user `padelbot`.
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip git
+sudo apt install -y python3 python3-venv python3-pip git wget xvfb xauth
+
+wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo apt install -y ./google-chrome-stable_current_amd64.deb
 
 sudo useradd --system --create-home --shell /usr/sbin/nologin padelbot
 sudo mkdir -p /opt/padel-bot
@@ -45,6 +48,8 @@ Let op: zonder `--wait` probeert dit direct te boeken op basis van de gegenereer
 
 ## Web UI service
 
+De webservice gebruikt Selenium/Chrome voor WhatsApp Web. Op een VPS zonder desktop draait Chrome via `xvfb-run`; dat staat al in `deploy/padel-bot.service`.
+
 ```bash
 sudo cp deploy/padel-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -53,6 +58,8 @@ sudo systemctl status padel-bot.service
 ```
 
 De web UI luistert standaard op `127.0.0.1:18018`. Zet er bij voorkeur Nginx met basic auth of een SSH tunnel voor.
+
+Open daarna de frontend, ga naar het WhatsApp-tabblad en scan de QR-code. De Chrome-sessie wordt bewaard in `state/whatsapp-selenium-profile`.
 
 ## Dagelijkse automatische run
 
