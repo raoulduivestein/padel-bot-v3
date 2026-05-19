@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import shutil
 import threading
 import time
 from typing import Any
@@ -112,14 +113,18 @@ class WhatsAppManager:
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-notifications")
         options.add_argument("--disable-blink-features=AutomationControlled")
+        options.add_argument("--remote-debugging-port=0")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
+        chrome_binary = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium")
+        if chrome_binary:
+            options.binary_location = chrome_binary
 
         try:
             self._driver = webdriver.Chrome(options=options)
         except Exception as exc:
             raise WhatsAppError(
-                "Could not start Chrome with Selenium. Install Google Chrome and run: pip install -r requirements.txt"
+                f"Could not start Chrome with Selenium. Chrome binary: {chrome_binary or 'not found'}. Error: {exc}"
             ) from exc
         self._driver.set_page_load_timeout(20)
         return self._driver
