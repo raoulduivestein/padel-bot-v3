@@ -49,6 +49,14 @@ class PadelConfig(BaseModel):
         "Bevestig of weiger hier: {invite_url}"
     )
     invite_message_templates: list[str] = []
+    takeover_message_template: str = (
+        "🎾 Baan overnemen 🎾\n"
+        "📅 {date}\n"
+        "🕰️ {time}\n"
+        "📍 {club_name}\n\n"
+        "Open de link, annuleer de baan en boek daarna direct zelf opnieuw met de spelers op de pagina:\n"
+        "{takeover_url}"
+    )
     booking_rules: list[BookingRule]
 
 
@@ -74,6 +82,14 @@ def default_padel_config() -> PadelConfig:
             "Padel uitnodiging: {date} om {time} bij {club_name}.",
             "{invite_url}",
         ],
+        takeover_message_template=(
+            "🎾 Baan overnemen 🎾\n"
+            "📅 {date}\n"
+            "🕰️ {time}\n"
+            "📍 {club_name}\n\n"
+            "Open de link, annuleer de baan en boek daarna direct zelf opnieuw met de spelers op de pagina:\n"
+            "{takeover_url}"
+        ),
         booking_rules=[
             BookingRule(day="monday", times=["21:00"], duration=2),
             BookingRule(day="tuesday", times=["18:00"], duration=2),

@@ -342,13 +342,27 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
+.run-actions {
+  flex-wrap: wrap;
+}
+
+.run-control-panel,
+.auth-panel,
+.slots-panel,
+.run-result-panel {
+  min-width: 0;
+}
+
 pre {
   min-height: 130px;
+  max-width: 100%;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fbfcfd;
   padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .history-list {
@@ -804,6 +818,62 @@ pre {
     padding: 12px;
   }
 
+  #runTab .grid {
+    gap: 12px;
+  }
+
+  #runTab .panel {
+    box-shadow: none;
+  }
+
+  #runTab .section-head {
+    margin-bottom: 10px;
+  }
+
+  .run-control-panel {
+    order: 1;
+  }
+
+  .auth-panel {
+    order: 2;
+  }
+
+  .slots-panel {
+    order: 3;
+  }
+
+  .run-result-panel {
+    order: 4;
+  }
+
+  .run-summary {
+    gap: 8px;
+  }
+
+  .run-summary div {
+    min-height: auto;
+    padding: 10px;
+  }
+
+  .run-summary span {
+    margin-bottom: 4px;
+  }
+
+  .run-actions button,
+  #authStatusBtn,
+  #slotsBtn {
+    width: 100%;
+  }
+
+  #authStatus,
+  #preview,
+  #runResult {
+    max-height: 320px;
+    min-height: 96px;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
   .section-head {
     align-items: stretch;
     flex-direction: column;
@@ -836,7 +906,7 @@ pre {
   .invite-item,
   .player-result,
   .player-chip,
-    .inline-player-search {
+  .inline-player-search {
     grid-template-columns: 1fr;
   }
 

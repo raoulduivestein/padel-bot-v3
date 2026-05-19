@@ -43,6 +43,7 @@
       "Padel uitnodiging: {date} om {time} bij {club_name}.",
       "{invite_url}"
     ],
+    "takeover_message_template": "🎾 Baan overnemen 🎾\n📅 {date}\n🕰️ {time}\n📍 {club_name}\n\nOpen de link, annuleer de baan en boek daarna direct zelf opnieuw met de spelers op de pagina:\n{takeover_url}",
     "booking_rules": [
       {"day": "monday", "times": ["21:00"], "duration": 2, "player_ids": []},
       {"day": "tuesday", "times": ["20:00"], "duration": 2, "player_ids": []},

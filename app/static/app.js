@@ -290,6 +290,10 @@ function joinMessageTemplates(templates, fallback) {
   return fallback || "Padel uitnodiging: {date} om {time} bij {club_name}.\n---\n{invite_url}";
 }
 
+function defaultTakeoverMessageTemplate() {
+  return "🎾 Baan overnemen 🎾\n📅 {date}\n🕰️ {time}\n📍 {club_name}\n\nOpen de link, annuleer de baan en boek daarna direct zelf opnieuw met de spelers op de pagina:\n{takeover_url}";
+}
+
 function collectInviteMessageTemplates() {
   return splitMessageTemplates($("inviteMessageTemplates").value);
 }
@@ -577,6 +581,7 @@ function fillForm(config) {
     config.padel.invite_message_templates,
     config.padel.invite_message_template
   );
+  $("takeoverMessageTemplate").value = config.padel.takeover_message_template || defaultTakeoverMessageTemplate();
   renderRules(config.padel.booking_rules || []);
   renderMembers(config.padel.members || []);
   renderAlwaysPlayers(config.padel.always_add_player_ids || []);
@@ -645,6 +650,7 @@ function collectForm() {
       fallback_to_any: $("fallbackToAny").checked,
       invite_message_template: inviteMessageTemplates[0] || "",
       invite_message_templates: inviteMessageTemplates,
+      takeover_message_template: $("takeoverMessageTemplate").value.trim() || defaultTakeoverMessageTemplate(),
       booking_rules: rules,
     },
   };
@@ -672,15 +678,21 @@ async function saveConfig(options = {}) {
 async function saveInviteMessages() {
   const templates = collectInviteMessageTemplates();
   if (!templates.length) throw new Error("Vul minimaal een invite message in.");
-  setStatus("Invite messages opslaan...");
+  const takeoverTemplate = $("takeoverMessageTemplate").value.trim() || defaultTakeoverMessageTemplate();
+  setStatus("Berichttemplates opslaan...");
   const result = await requestJson("/api/invite-messages", {
     method: "PUT",
-    body: JSON.stringify({ invite_message_templates: templates }),
+    body: JSON.stringify({
+      invite_message_templates: templates,
+      takeover_message_template: takeoverTemplate,
+    }),
   });
   state.config.padel.invite_message_template = result.invite_message_template;
   state.config.padel.invite_message_templates = result.invite_message_templates;
+  state.config.padel.takeover_message_template = result.takeover_message_template;
   $("inviteMessageTemplates").value = joinMessageTemplates(result.invite_message_templates, result.invite_message_template);
-  setStatus("Invite messages opgeslagen.");
+  $("takeoverMessageTemplate").value = result.takeover_message_template || takeoverTemplate;
+  setStatus("Berichttemplates opgeslagen.");
 }
 
 async function previewSlots() {

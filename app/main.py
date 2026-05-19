@@ -98,6 +98,7 @@ class ConfigUpdateRequest(BaseModel):
 
 class InviteMessagesUpdateRequest(BaseModel):
     invite_message_templates: list[str]
+    takeover_message_template: str | None = None
 
 
 class PhonebookUpsertRequest(BaseModel):
@@ -196,12 +197,15 @@ def update_invite_messages(payload: InviteMessagesUpdateRequest) -> dict:
         merged = current.model_dump()
         merged["padel"]["invite_message_templates"] = templates
         merged["padel"]["invite_message_template"] = templates[0]
+        if payload.takeover_message_template and payload.takeover_message_template.strip():
+            merged["padel"]["takeover_message_template"] = payload.takeover_message_template.strip()
         updated = AppConfig.model_validate(merged)
         write_config(updated)
         return {
             "ok": True,
             "invite_message_template": updated.padel.invite_message_template,
             "invite_message_templates": updated.padel.invite_message_templates,
+            "takeover_message_template": updated.padel.takeover_message_template,
         }
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -390,12 +394,12 @@ def render_invite_page(invite: dict[str, Any], *, message: str | None = None, st
       </head>
       <body>
         <main>
-          <h1>Padel uitnodiging</h1>
+          <h1>🎾 Padel uitnodiging</h1>
           <div class="meta">
-            <div><span>Speler</span><strong>{escape(str(player.get("fullName") or "-"))}</strong></div>
-            <div><span>Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
-            <div><span>Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))}</strong></div>
-            <div><span>Status</span><strong class="status">{escape(status)}</strong></div>
+            <div><span>👤 Speler</span><strong>{escape(str(player.get("fullName") or "-"))}</strong></div>
+            <div><span>📅 Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
+            <div><span>📍 Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))}</strong></div>
+            <div><span>✅ Status</span><strong class="status">{escape(status)}</strong></div>
           </div>
           {notice}
           {action_html}
@@ -461,17 +465,17 @@ def render_takeover_page(invite: dict[str, Any], *, message: str | None = None, 
       </head>
       <body>
         <main>
-          <h1>Baan overnemen</h1>
+          <h1>🎾 Baan overnemen</h1>
           <p>Deze baan kan door jou worden overgenomen. Annuleer de baan alleen als je direct daarna zelf in de David Lloyd app opnieuw gaat boeken.</p>
           <div class="warning"><strong>Let op:</strong> zodra je annuleert komt de baan vrij. Boek direct opnieuw met de spelers hieronder, anders kan iemand anders de baan reserveren.</div>
           <div class="meta">
-            <div><span>Ontvanger</span><strong>{escape(str(recipient.get("fullName") or "-"))}</strong></div>
-            <div><span>Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
-            <div><span>Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))} - Court {escape(str(booking.get("courtId") or "-"))}</strong></div>
-            <div><span>Status</span><strong class="status">{escape(status)}</strong></div>
+            <div><span>👤 Ontvanger</span><strong>{escape(str(recipient.get("fullName") or "-"))}</strong></div>
+            <div><span>📅 Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
+            <div><span>📍 Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))} - Court {escape(str(booking.get("courtId") or "-"))}</strong></div>
+            <div><span>✅ Status</span><strong class="status">{escape(status)}</strong></div>
           </div>
           {notice}
-          <h2>Spelers om opnieuw toe te voegen</h2>
+          <h2>👥 Spelers om opnieuw toe te voegen</h2>
           <ul>{participant_rows or "<li><span>Geen spelers opgegeven.</span></li>"}</ul>
           {action_html}
         </main>
@@ -518,13 +522,33 @@ def format_invite_message(template: str, *, booking: dict[str, Any], player: dic
         raise HTTPException(status_code=400, detail=f"Unknown invite template placeholder: {exc}") from exc
 
 
-def format_takeover_message(*, booking: dict[str, Any], recipient: dict[str, Any], takeover_url: str) -> str:
-    return (
-        f"Baan overnemen: {format_date_nl(booking.get('date'))} om {format_time_nl(booking.get('startTime'))} "
-        f"bij {booking.get('clubName') or 'David Lloyd'}.\n\n"
-        "Open de link, annuleer de baan en boek daarna direct zelf opnieuw met de spelers op de pagina:\n"
-        f"{takeover_url}"
-    )
+def format_takeover_message(
+    template: str,
+    *,
+    booking: dict[str, Any],
+    recipient: dict[str, Any],
+    participants: list[dict[str, Any]],
+    takeover_url: str,
+) -> str:
+    participant_names = [
+        str(player.get("fullName") or player.get("encodedContactId") or "")
+        for player in participants
+        if player.get("fullName") or player.get("encodedContactId")
+    ]
+    values = {
+        "recipient_name": recipient.get("fullName") or "",
+        "date": format_date_nl(booking.get("date")),
+        "time": format_time_nl(booking.get("startTime")),
+        "club_name": booking.get("clubName") or "David Lloyd",
+        "court_id": booking.get("courtId") or "-",
+        "activity_name": booking.get("activityName") or "Padel",
+        "players": ", ".join(participant_names),
+        "takeover_url": takeover_url,
+    }
+    try:
+        return template.format(**values)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=f"Unknown takeover template placeholder: {exc}") from exc
 
 
 def normalize_phone_digits(phone: str | None) -> str:
@@ -673,7 +697,13 @@ def send_booking_takeover(payload: SendTakeoverRequest, request: Request) -> dic
         participants=participants,
     )
     takeover_url = public_url(cfg, request, "takeover_page", token=invite["token"])
-    message = format_takeover_message(booking=invite["booking"], recipient=recipient, takeover_url=takeover_url)
+    message = format_takeover_message(
+        cfg.padel.takeover_message_template,
+        booking=invite["booking"],
+        recipient=recipient,
+        participants=participants,
+        takeover_url=takeover_url,
+    )
     try:
         send_result = whatsapp_manager.send_message(phone=recipient["phone"], message=message)
     except (WhatsAppError, concurrent.futures.TimeoutError) as exc:

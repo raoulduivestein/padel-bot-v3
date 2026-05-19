@@ -31,7 +31,7 @@
 
       <section id="runTab" class="tab-page active">
         <section class="grid">
-          <section class="panel">
+          <section class="panel run-control-panel">
             <div class="section-head">
               <h2>Direct Run</h2>
             </div>
@@ -53,14 +53,14 @@
               Attempts
               <input id="runAttempts" type="number" min="1" max="20" value="10">
             </label>
-            <div class="actions left">
+            <div class="actions left run-actions">
               <button id="refreshAuthBtn" type="button">Refresh auth</button>
               <button id="freshLoginBtn" type="button">Fresh login</button>
               <button id="runNowBtn" type="button" class="primary">Start run</button>
             </div>
           </section>
 
-          <section class="panel">
+          <section class="panel auth-panel">
             <div class="section-head">
               <h2>Auth Status</h2>
               <button id="authStatusBtn" type="button">Check</button>
@@ -68,7 +68,7 @@
             <pre id="authStatus">{}</pre>
           </section>
 
-          <section class="panel wide">
+          <section class="panel wide slots-panel">
             <div class="section-head">
               <h2>Slots</h2>
               <button id="slotsBtn" type="button">Generate slots</button>
@@ -76,7 +76,7 @@
             <pre id="preview">{}</pre>
           </section>
 
-          <section class="panel wide">
+          <section class="panel wide run-result-panel">
             <div class="section-head">
               <h2>Run Result</h2>
             </div>
@@ -233,10 +233,15 @@
               Invite messages
               <textarea id="inviteMessageTemplates" rows="7"></textarea>
             </label>
+            <label>
+              Takeover message
+              <textarea id="takeoverMessageTemplate" rows="7"></textarea>
+            </label>
             <div class="actions left">
               <button id="saveInviteMessagesBtn" type="button">Save invite messages</button>
             </div>
             <p class="help">Separate multiple WhatsApp messages with a line containing only ---. Available placeholders: {player_name}, {date}, {time}, {club_name}, {court_id}, {activity_name}, {invite_url}</p>
+            <p class="help">Takeover placeholders: {recipient_name}, {date}, {time}, {club_name}, {court_id}, {activity_name}, {players}, {takeover_url}</p>
           </section>
 
           <section class="panel wide">
@@ -307,6 +312,6 @@
         </div>
       </section>
     </div>
-    <script src="/static/app.js?v=20260519-6"></script>
+    <script src="/static/app.js?v=20260519-8"></script>
   </body>
 </html>
