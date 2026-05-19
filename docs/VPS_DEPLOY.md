@@ -57,9 +57,24 @@ sudo systemctl enable --now padel-bot.service
 sudo systemctl status padel-bot.service
 ```
 
-De web UI luistert standaard op `127.0.0.1:18018`. Zet er bij voorkeur Nginx met basic auth of een SSH tunnel voor.
+De web UI luistert standaard op `127.0.0.1:18018`. Zet er bij voorkeur Nginx met basic auth voor.
+
+Gebruik `deploy/nginx-padel-bot.conf` als uitgangspunt. Die config houdt de tool zelf achter basic auth, maar laat `/invite/...` publiek bereikbaar zodat spelers zonder login kunnen accepteren of weigeren. De invite-token in de URL is de toegangssleutel.
 
 Open daarna de frontend, ga naar het WhatsApp-tabblad en scan de QR-code. De Chrome-sessie wordt bewaard in `state/whatsapp-selenium-profile`.
+
+Voor Nginx basic auth:
+
+```bash
+apt install -y nginx apache2-utils certbot python3-certbot-nginx
+htpasswd -c /etc/nginx/.padel-bot.htpasswd jouw-admin-naam
+cp deploy/nginx-padel-bot.conf /etc/nginx/sites-available/padel-bot
+nano /etc/nginx/sites-available/padel-bot
+ln -sf /etc/nginx/sites-available/padel-bot /etc/nginx/sites-enabled/padel-bot
+nginx -t
+systemctl reload nginx
+certbot --nginx -d jouw-domein.nl
+```
 
 ## Dagelijkse automatische run
 
