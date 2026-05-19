@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Padel Bot</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260518-1">
+    <link rel="stylesheet" href="/static/styles.css?v=20260519-2">
   </head>
   <body>
     <main class="shell">
@@ -106,13 +106,6 @@
             </div>
             <div id="bookingsList" class="booking-list"></div>
           </section>
-          <section class="panel wide">
-            <div class="section-head">
-              <h2>Invites</h2>
-              <button id="invitesRefreshBtn" type="button">Refresh</button>
-            </div>
-            <div class="invite-list" data-invites-list></div>
-          </section>
         </section>
       </section>
 
@@ -136,6 +129,7 @@
               <button id="phonebookRefreshBtn" type="button">Refresh</button>
             </div>
             <div class="phonebook-tools">
+              <div id="phonebookSearch"></div>
               <label>
                 Filter
                 <input id="phonebookFilter" type="search" placeholder="Search name, number or member id">
@@ -272,6 +266,6 @@
         </section>
       </section>
     </main>
-    <script src="/static/app.js?v=20260518-1"></script>
+    <script src="/static/app.js?v=20260519-2"></script>
   </body>
 </html>

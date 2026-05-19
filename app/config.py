@@ -43,6 +43,7 @@ class PadelConfig(BaseModel):
     always_add_player_ids: list[str] = []
     preferred_courts: list[int] = []
     fallback_to_any: bool = True
+    booking_confirmation_type: str = "provisional"
     invite_message_template: str = (
         "Padel uitnodiging: {date} om {time} bij {club_name}.\n\n"
         "Bevestig of weiger hier: {invite_url}"
@@ -64,6 +65,7 @@ def default_padel_config() -> PadelConfig:
         always_add_player_ids=["SHlQK3EvQVU3VXk4QTFraXN1WWoxdw=="],
         preferred_courts=[737381, 737383, 737385],
         fallback_to_any=True,
+        booking_confirmation_type="provisional",
         invite_message_template=(
             "Padel uitnodiging: {date} om {time} bij {club_name}.\n\n"
             "Bevestig of weiger hier: {invite_url}"

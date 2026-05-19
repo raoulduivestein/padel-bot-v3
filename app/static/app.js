@@ -1,11 +1,37 @@
 const state = {
   config: null,
   phonebook: [],
+  invites: [],
 };
 
 const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
 const $ = (id) => document.getElementById(id);
+
+function formatDateNl(value) {
+  if (!value) return "-";
+  const [year, month, day] = String(value).split("-");
+  if (year && month && day) return `${day}-${month}-${year}`;
+  return String(value);
+}
+
+function formatTimeNl(value) {
+  if (!value) return "-";
+  return String(value).slice(0, 5);
+}
+
+function formatDateTimeNl(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("nl-NL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
 
 function setStatus(message, isError = false) {
   const el = $("statusText");
@@ -256,12 +282,15 @@ function renderSearchResults(root, players, onAdd) {
     const add = document.createElement("button");
     add.type = "button";
     add.textContent = "Add";
-    add.addEventListener("click", () => {
+    add.addEventListener("click", async () => {
       try {
-        onAdd(player);
-        setStatus("Player toegevoegd. Klik Save om op te slaan.");
+        add.disabled = true;
+        const message = await Promise.resolve(onAdd(player));
+        setStatus(message || "Player toegevoegd. Klik Save om op te slaan.");
       } catch (error) {
         setStatus(error.message, true);
+      } finally {
+        add.disabled = false;
       }
     });
 
@@ -526,7 +555,7 @@ function renderRunHistory(runs) {
     item.innerHTML = `
       <summary>
         <span class="status-dot"></span>
-        <strong>${run.timestamp || "-"}</strong>
+        <strong>${formatDateTimeNl(run.timestamp)}</strong>
         <span>${run.source || "-"}</span>
         <span>${message}</span>
       </summary>
@@ -542,8 +571,8 @@ async function loadRunHistory() {
 }
 
 function formatBookingTitle(booking) {
-  const date = booking.date || "-";
-  const time = booking.startTime || "-";
+  const date = formatDateNl(booking.date);
+  const time = formatTimeNl(booking.startTime);
   const court = booking.courtId ? `Court ${booking.courtId}` : "Court -";
   return `${date} ${time} - ${court}`;
 }
@@ -589,6 +618,86 @@ async function saveBookingPlayers(booking, playersRoot) {
   await loadBookings();
   setStatus("Booking spelers opgeslagen.");
   return result;
+}
+
+async function cancelBooking(booking) {
+  if (!booking.encodedBookingReference) {
+    throw new Error("Deze boeking mist encodedBookingReference.");
+  }
+  const label = `${formatDateNl(booking.date)} ${formatTimeNl(booking.startTime)} - Court ${booking.courtId || "-"}`;
+  if (!window.confirm(`Weet je zeker dat je deze boeking wilt annuleren?\n\n${label}`)) {
+    return null;
+  }
+  setStatus("Booking annuleren...");
+  const result = await requestJson("/padel/bookings/cancel", {
+    method: "POST",
+    body: JSON.stringify({ encodedBookingReference: booking.encodedBookingReference }),
+  });
+  await loadBookings();
+  setStatus("Booking geannuleerd.");
+  return result;
+}
+
+function invitesForBooking(booking) {
+  const ref = booking.encodedBookingReference;
+  return (state.invites || []).filter((invite) => invite.encodedBookingReference === ref);
+}
+
+function inviteStatusLabel(invite) {
+  const status = invite.status || "-";
+  const opened = invite.openedAt ? `Geopend ${formatDateTimeNl(invite.openedAt)}` : "Niet geopend";
+  return `${status} - ${opened}`;
+}
+
+function renderBookingInvites(root, booking) {
+  const invites = invitesForBooking(booking);
+  root.innerHTML = "";
+  const title = document.createElement("h3");
+  title.textContent = "Uitnodigingen";
+  root.appendChild(title);
+  if (!invites.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "Nog geen uitnodigingen voor deze boeking.";
+    root.appendChild(empty);
+    return;
+  }
+  invites.forEach((invite) => {
+    const player = invite.player || {};
+    const item = document.createElement("div");
+    item.className = `invite-item invite-${invite.status || "unknown"}`;
+    item.innerHTML = `
+      <div>
+        <strong>${player.fullName || player.encodedContactId || "-"}</strong>
+        <span>${inviteStatusLabel(invite)}</span>
+        <span>Aangemaakt ${formatDateTimeNl(invite.createdAt)}${invite.openCount ? ` - ${invite.openCount}x geopend` : ""}</span>
+      </div>
+      <span class="invite-status">${invite.status || "-"}</span>
+    `;
+    const actions = document.createElement("div");
+    actions.className = "invite-actions";
+    const open = document.createElement("a");
+    open.href = `/invite/${invite.token}`;
+    open.target = "_blank";
+    open.rel = "noreferrer";
+    open.textContent = "Open";
+    actions.appendChild(open);
+    if (["pending", "sent", "send_failed"].includes(invite.status)) {
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.className = "danger";
+      cancel.textContent = "Intrekken";
+      cancel.addEventListener("click", async () => {
+        setStatus("Uitnodiging intrekken...");
+        await requestJson(`/bookings/invites/${encodeURIComponent(invite.token)}/cancel`, { method: "POST" });
+        await loadBookings();
+        setStatus("Uitnodiging ingetrokken.");
+      });
+      actions.appendChild(cancel);
+    }
+    item.appendChild(actions);
+    root.appendChild(item);
+  });
 }
 
 function renderBookingPlayers(root, players) {
@@ -697,7 +806,7 @@ function renderBookings(bookings) {
             },
           }),
         });
-        await loadInvites();
+        await loadBookings();
         setStatus("WhatsApp invite verstuurd.");
       } catch (error) {
         setStatus(error.message, true);
@@ -709,6 +818,10 @@ function renderBookings(bookings) {
     invite.appendChild(select);
     invite.appendChild(inviteButton);
 
+    const bookingInvites = document.createElement("div");
+    bookingInvites.className = "booking-invites";
+    renderBookingInvites(bookingInvites, booking);
+
     const actions = document.createElement("div");
     actions.className = "booking-actions";
     const save = document.createElement("button");
@@ -718,15 +831,25 @@ function renderBookings(bookings) {
     save.addEventListener("click", () => {
       saveBookingPlayers(booking, playersRoot).catch((error) => setStatus(error.message, true));
     });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "danger";
+    cancel.textContent = "Cancel booking";
+    cancel.disabled = booking.canMemberCancel === false;
+    cancel.addEventListener("click", () => {
+      cancelBooking(booking).catch((error) => setStatus(error.message, true));
+    });
     const raw = document.createElement("details");
     raw.className = "booking-raw";
     raw.innerHTML = `<summary>Raw booking</summary><pre>${JSON.stringify(booking, null, 2)}</pre>`;
     actions.appendChild(save);
+    actions.appendChild(cancel);
     actions.appendChild(raw);
 
     editor.appendChild(playersRoot);
     editor.appendChild(searchRoot);
     editor.appendChild(invite);
+    editor.appendChild(bookingInvites);
     editor.appendChild(actions);
     item.appendChild(head);
     item.appendChild(editor);
@@ -737,9 +860,11 @@ function renderBookings(bookings) {
 async function loadBookings() {
   setStatus("Boekingen laden...");
   await loadPhonebook({ quiet: true });
+  const invitesPayload = await requestJson("/bookings/invites");
+  state.invites = invitesPayload.invites || [];
+  renderInvites(state.invites);
   const payload = await requestJson("/padel/bookings");
   renderBookings(payload.bookings || []);
-  await loadInvites();
   setStatus("Boekingen geladen.");
 }
 
@@ -760,7 +885,8 @@ function renderInvites(invites) {
       item.innerHTML = `
         <div>
           <strong>${player.fullName || player.encodedContactId || "-"}</strong>
-          <span>${booking.date || "-"} ${booking.startTime || "-"} - Court ${booking.courtId || "-"}</span>
+          <span>${formatDateNl(booking.date)} ${formatTimeNl(booking.startTime)} - Court ${booking.courtId || "-"}</span>
+          <span>${invite.openedAt ? `Geopend ${formatDateTimeNl(invite.openedAt)}` : "Niet geopend"}</span>
           <code>${invite.token || ""}</code>
         </div>
         <span class="invite-status">${invite.status || "-"}</span>
@@ -794,7 +920,8 @@ function renderInvites(invites) {
 
 async function loadInvites() {
   const payload = await requestJson("/bookings/invites");
-  renderInvites(payload.invites || []);
+  state.invites = payload.invites || [];
+  renderInvites(state.invites);
 }
 
 async function checkWhatsAppStatus() {
@@ -909,8 +1036,22 @@ async function loadPhonebook(options = {}) {
   if (!options.quiet) setStatus("Phonebook laden...");
   const payload = await requestJson("/phonebook");
   state.phonebook = payload.players || [];
+  renderPhonebookSearch();
   renderPhonebook(state.phonebook);
   if (!options.quiet) setStatus("Phonebook geladen.");
+}
+
+function renderPhonebookSearch() {
+  const root = $("phonebookSearch");
+  if (!root) return;
+  renderSearchBox(root, {
+    placeholder: "Search player to add to phonebook",
+    onAdd: async (player) => {
+      await upsertPhonebookPlayer(player, "phonebook");
+      await loadPhonebook({ quiet: true });
+      return `${player.fullName || "Player"} toegevoegd aan phonebook.`;
+    },
+  });
 }
 
 function switchTab(name) {
@@ -935,6 +1076,7 @@ function switchTab(name) {
 }
 
 function bind() {
+  renderPhonebookSearch();
   $("reloadBtn").addEventListener("click", () => loadConfig().catch((error) => setStatus(error.message, true)));
   $("saveBtn").addEventListener("click", () => saveConfig().catch((error) => setStatus(error.message, true)));
   $("saveInviteMessagesBtn").addEventListener("click", () => saveInviteMessages().catch((error) => setStatus(error.message, true)));
@@ -944,7 +1086,7 @@ function bind() {
   $("authStatusBtn").addEventListener("click", () => checkAuthStatus().catch((error) => setStatus(error.message, true)));
   $("runHistoryBtn").addEventListener("click", () => loadRunHistory().catch((error) => setStatus(error.message, true)));
   $("bookingsRefreshBtn").addEventListener("click", () => loadBookings().catch((error) => setStatus(error.message, true)));
-  $("invitesRefreshBtn").addEventListener("click", () => loadInvites().catch((error) => setStatus(error.message, true)));
+  $("invitesRefreshBtn")?.addEventListener("click", () => loadInvites().catch((error) => setStatus(error.message, true)));
   $("invitesTabRefreshBtn").addEventListener("click", () => loadInvites().catch((error) => setStatus(error.message, true)));
   $("phonebookRefreshBtn").addEventListener("click", () => loadPhonebook().catch((error) => setStatus(error.message, true)));
   $("phonebookFilter").addEventListener("input", () => renderPhonebook(state.phonebook));

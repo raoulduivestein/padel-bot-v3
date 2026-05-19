@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import re
+from datetime import datetime
 from html import escape
 from typing import Any
 from urllib.parse import quote
@@ -51,6 +52,10 @@ class BookSlotRequest(BaseModel):
 class UpdateBookingPlayersRequest(BaseModel):
     encodedBookingReference: str
     playersEncodedContactIds: list[str] = Field(max_length=4)
+
+
+class CancelBookingRequest(BaseModel):
+    encodedBookingReference: str
 
 
 class WhatsAppSendRequest(BaseModel):
@@ -260,6 +265,7 @@ def normalize_booking(booking: dict[str, Any]) -> dict[str, Any]:
         "activityName": booking.get("activityName") or details.get("activityName"),
         "courtId": details.get("courtId"),
         "encodedBookingReference": booking.get("encodedBookingReference"),
+        "canMemberCancel": booking.get("canMemberCancel"),
         "players": [
             {
                 "name": player.get("fullName") or player.get("name"),
@@ -272,6 +278,22 @@ def normalize_booking(booking: dict[str, Any]) -> dict[str, Any]:
         ],
         "raw": booking,
     }
+
+
+def format_date_nl(value: Any) -> str:
+    text = str(value or "")
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").strftime("%d-%m-%Y")
+    except ValueError:
+        return text or "-"
+
+
+def format_time_nl(value: Any) -> str:
+    text = str(value or "")
+    try:
+        return datetime.strptime(text, "%H:%M").strftime("%H:%M")
+    except ValueError:
+        return text or "-"
 
 
 def update_booking_players_with_ids(encoded_booking_reference: str, player_ids: list[str]) -> dict:
@@ -292,6 +314,18 @@ def update_booking_players_with_ids(encoded_booking_reference: str, player_ids: 
         sync_booking_players([returned_booking])
         return {"ok": True, "booking": normalize_booking(returned_booking), "raw": data}
     return {"ok": True, "raw": data}
+
+
+def cancel_booking_by_ref(encoded_booking_reference: str) -> dict:
+    if not encoded_booking_reference:
+        raise HTTPException(status_code=400, detail="encodedBookingReference is required")
+    cfg = load_config()
+    booking_reference = quote(encoded_booking_reference, safe="")
+    result = DavidLloydClient(cfg).mobile_post(
+        f"/clubs/{cfg.padel.club_id}/classes/bookings/by-ref/{booking_reference}/cancel",
+        payload={},
+    )
+    return {"ok": True, "cancelled": True, "raw": result}
 
 
 def find_booking(encoded_booking_reference: str) -> dict[str, Any] | None:
@@ -350,7 +384,7 @@ def render_invite_page(invite: dict[str, Any], *, message: str | None = None, st
           <h1>Padel uitnodiging</h1>
           <div class="meta">
             <div><span>Speler</span><strong>{escape(str(player.get("fullName") or "-"))}</strong></div>
-            <div><span>Datum en tijd</span><strong>{escape(str(booking.get("date") or "-"))} om {escape(str(booking.get("startTime") or "-"))}</strong></div>
+            <div><span>Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
             <div><span>Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))}</strong></div>
             <div><span>Status</span><strong class="status">{escape(status)}</strong></div>
           </div>
@@ -378,8 +412,8 @@ def invite_message_templates(config: AppConfig) -> list[str]:
 def format_invite_message(template: str, *, booking: dict[str, Any], player: dict[str, Any], invite_url: str) -> str:
     values = {
         "player_name": player.get("fullName") or "",
-        "date": booking.get("date") or "-",
-        "time": booking.get("startTime") or "-",
+        "date": format_date_nl(booking.get("date")),
+        "time": format_time_nl(booking.get("startTime")),
         "club_name": booking.get("clubName") or "David Lloyd",
         "court_id": booking.get("courtId") or "-",
         "activity_name": booking.get("activityName") or "Padel",
@@ -423,6 +457,16 @@ def update_booking_players(payload: UpdateBookingPlayersRequest) -> dict:
             payload.encodedBookingReference,
             payload.playersEncodedContactIds,
         )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except DavidLloydError as exc:
+        raise handle_error(exc) from exc
+
+
+@app.post("/padel/bookings/cancel")
+def cancel_booking(payload: CancelBookingRequest) -> dict:
+    try:
+        return cancel_booking_by_ref(payload.encodedBookingReference)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DavidLloydError as exc:
@@ -520,6 +564,10 @@ def invite_page(token: str) -> HTMLResponse:
     invite = get_invite(token)
     if invite is None:
         raise HTTPException(status_code=404, detail="Invite not found")
+    changes: dict[str, Any] = {"openCount": int(invite.get("openCount") or 0) + 1}
+    if not invite.get("openedAt"):
+        changes["openedAt"] = datetime.now().isoformat(timespec="seconds")
+    invite = update_invite(token, **changes)
     message = None if active_invite(invite) else "Deze uitnodiging is niet meer actief."
     return render_invite_page(invite, message=message)
 

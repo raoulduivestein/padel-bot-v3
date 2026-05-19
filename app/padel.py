@@ -152,9 +152,10 @@ class PadelBookingService:
 
         self.update_booking_players(booking_ref, member, slot.player_ids or [])
 
+        confirmation_type = self.config.booking_confirmation_type or "confirmed"
         confirmed = self.client.mobile_post(
             f"/clubs/{self.config.club_id}/members/me/bookings/{booking_ref}/confirmCourt?return-booking=true",
-            payload={"courtConfirmationType": "provisional"},
+            payload={"courtConfirmationType": confirmation_type},
         )
         return {
             "ok": True,

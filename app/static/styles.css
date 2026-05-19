@@ -472,6 +472,21 @@ pre {
   margin: 0;
 }
 
+.booking-invites {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+  padding: 10px;
+}
+
+.booking-invites h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
 .booking-actions {
   display: flex;
   align-items: center;
@@ -496,7 +511,9 @@ pre {
 }
 
 .phonebook-tools {
-  max-width: 360px;
+  display: grid;
+  gap: 14px;
+  max-width: 760px;
 }
 
 .qr-image {

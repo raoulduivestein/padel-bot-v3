@@ -36,6 +36,12 @@
     ],
     "preferred_courts": [737381, 737383, 737385],
     "fallback_to_any": true,
+    "booking_confirmation_type": "provisional",
+    "invite_message_template": "Padel uitnodiging: {date} om {time} bij {club_name}.\n\nBevestig of weiger hier: {invite_url}",
+    "invite_message_templates": [
+      "Padel uitnodiging: {date} om {time} bij {club_name}.",
+      "{invite_url}"
+    ],
     "booking_rules": [
       {"day": "monday", "times": ["21:00"], "duration": 2, "player_ids": []},
       {"day": "tuesday", "times": ["20:00"], "duration": 2, "player_ids": []},
