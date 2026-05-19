@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sys
 import threading
 import time
 from typing import Any
@@ -100,6 +101,7 @@ class WhatsAppManager:
 
         try:
             from selenium import webdriver
+            from selenium.webdriver.chrome.service import Service
             from selenium.webdriver.chrome.options import Options
         except ImportError as exc:
             raise WhatsAppError("Selenium is not installed. Run: pip install -r requirements.txt") from exc
@@ -119,17 +121,26 @@ class WhatsAppManager:
         options.add_argument("--password-store=basic")
         options.add_argument("--use-mock-keychain")
         options.add_argument("--remote-debugging-port=0")
+        if not sys.platform.startswith("win"):
+            options.add_argument("--headless=new")
         options.add_experimental_option("excludeSwitches", ["enable-automation"])
         options.add_experimental_option("useAutomationExtension", False)
         chrome_binary = shutil.which("google-chrome") or shutil.which("google-chrome-stable") or shutil.which("chromium")
         if chrome_binary:
             options.binary_location = chrome_binary
 
+        log_path = ROOT / "state" / "chromedriver.log"
         try:
-            self._driver = webdriver.Chrome(options=options)
+            self._driver = webdriver.Chrome(service=Service(log_output=str(log_path)), options=options)
         except Exception as exc:
+            driver_log = ""
+            try:
+                driver_log = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+            except Exception:
+                driver_log = "unavailable"
             raise WhatsAppError(
-                f"Could not start Chrome with Selenium. Chrome binary: {chrome_binary or 'not found'}. Error: {exc}"
+                f"Could not start Chrome with Selenium. Chrome binary: {chrome_binary or 'not found'}. "
+                f"Error: {exc}. ChromeDriver log: {driver_log}"
             ) from exc
         self._driver.set_page_load_timeout(20)
         return self._driver
