@@ -91,6 +91,7 @@ class ConfigUpdateRequest(BaseModel):
     username: str
     password: str | None = None
     device_id: str
+    public_base_url: str | None = None
     signature_mode: str
     padel: dict[str, Any]
 
@@ -168,6 +169,7 @@ def update_api_config(payload: ConfigUpdateRequest) -> dict:
         merged = current.model_dump()
         merged["username"] = payload.username
         merged["device_id"] = payload.device_id
+        merged["public_base_url"] = payload.public_base_url.strip() if payload.public_base_url else None
         merged["signature_mode"] = payload.signature_mode
         merged["padel"] = payload.padel
         if payload.password:
@@ -534,6 +536,13 @@ def normalize_phone_digits(phone: str | None) -> str:
     return digits
 
 
+def public_url(config: AppConfig, request: Request, route_name: str, **path_params: str) -> str:
+    path = request.url_for(route_name, **path_params).path
+    if config.public_base_url:
+        return f"{config.public_base_url.rstrip('/')}{path}"
+    return str(request.url_for(route_name, **path_params))
+
+
 @app.get("/padel/bookings")
 def padel_bookings() -> dict:
     try:
@@ -626,7 +635,7 @@ def send_booking_invite(payload: SendInviteRequest, request: Request) -> dict:
         player=player,
         booking=payload.booking,
     )
-    invite_url = str(request.url_for("invite_page", token=invite["token"]))
+    invite_url = public_url(cfg, request, "invite_page", token=invite["token"])
     booking = invite["booking"]
     messages = [
         format_invite_message(template, booking=booking, player=player, invite_url=invite_url)
@@ -646,6 +655,7 @@ def send_booking_invite(payload: SendInviteRequest, request: Request) -> dict:
 
 @app.post("/bookings/takeovers/send")
 def send_booking_takeover(payload: SendTakeoverRequest, request: Request) -> dict:
+    cfg = load_config()
     recipient = payload.recipient.model_dump()
     participants = [participant.model_dump() for participant in payload.participants]
     if not recipient.get("phone"):
@@ -662,7 +672,7 @@ def send_booking_takeover(payload: SendTakeoverRequest, request: Request) -> dic
         kind="takeover",
         participants=participants,
     )
-    takeover_url = str(request.url_for("takeover_page", token=invite["token"]))
+    takeover_url = public_url(cfg, request, "takeover_page", token=invite["token"])
     message = format_takeover_message(booking=invite["booking"], recipient=recipient, takeover_url=takeover_url)
     try:
         send_result = whatsapp_manager.send_message(phone=recipient["phone"], message=message)

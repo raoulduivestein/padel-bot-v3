@@ -2,6 +2,7 @@
   "username": "+31644718872",
   "password": "Duives01!",
   "device_id": "3612c72cd89cad06",
+  "public_base_url": "https://padel-bot.nl",
   "user_agent": "OneApp/150.0.3 (co.uk.davidlloyd.mobileapp; build:515117598; Android SDK 36) OkHttp/4.12.0",
   "okta_user_agent": "okta-oidc-android/36 com.okta.oidc/1.1.0",
   "okta_authn_user_agent": "okta-sdk-java/2.0.0 java/0 Linux/6.6.66-android15-8-gd0c43a640eab-ab13812146",

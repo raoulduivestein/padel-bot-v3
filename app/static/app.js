@@ -564,6 +564,7 @@ function fillForm(config) {
   $("username").value = config.username || "";
   $("password").value = "";
   $("deviceId").value = config.device_id || "";
+  $("publicBaseUrl").value = config.public_base_url || "";
   $("signatureMode").value = config.signature_mode || "davidlloyd_v1";
   $("prepTime").value = config.padel.run_time?.prep || "07:59:55";
   $("bookingTime").value = config.padel.run_time?.booking || "08:00:00";
@@ -627,6 +628,7 @@ function collectForm() {
     username: $("username").value.trim(),
     password: $("password").value || null,
     device_id: $("deviceId").value.trim(),
+    public_base_url: $("publicBaseUrl").value.trim() || null,
     signature_mode: $("signatureMode").value,
     padel: {
       run_time: {

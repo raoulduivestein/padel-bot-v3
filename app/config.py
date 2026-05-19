@@ -90,6 +90,7 @@ class AppConfig(BaseModel):
     username: str
     password: str
     device_id: str = Field(min_length=8)
+    public_base_url: str | None = None
     user_agent: str
     okta_user_agent: str
     okta_authn_user_agent: str
