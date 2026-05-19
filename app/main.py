@@ -77,6 +77,13 @@ class SendInviteRequest(BaseModel):
     player: InvitePlayer
 
 
+class SendTakeoverRequest(BaseModel):
+    encodedBookingReference: str
+    booking: dict[str, Any]
+    recipient: InvitePlayer
+    participants: list[InvitePlayer] = Field(min_length=1, max_length=4)
+
+
 ACTIVE_INVITE_STATUSES = {"pending", "sent", "send_failed"}
 
 
@@ -397,6 +404,90 @@ def render_invite_page(invite: dict[str, Any], *, message: str | None = None, st
     return HTMLResponse(body, status_code=status_code)
 
 
+def render_takeover_page(invite: dict[str, Any], *, message: str | None = None, status_code: int = 200) -> HTMLResponse:
+    booking = invite.get("booking") or {}
+    recipient = invite.get("player") or {}
+    participants = invite.get("participants") or []
+    status = str(invite.get("status") or "")
+    can_cancel = active_invite(invite)
+    participant_rows = "\n".join(
+        f"""
+        <li>
+          <span>{escape(str(player.get("fullName") or player.get("encodedContactId") or "-"))}</span>
+          <button type="button" data-copy="{escape(str(player.get("fullName") or ""))}">Kopieer naam</button>
+        </li>
+        """
+        for player in participants
+    )
+    action_html = (
+        f"""
+        <form method="post" action="/takeover/{invite["token"]}/cancel">
+          <button class="danger" type="submit">Baan annuleren</button>
+        </form>
+        """
+        if can_cancel
+        else ""
+    )
+    notice = f"<p class='notice'>{escape(message)}</p>" if message else ""
+    body = f"""
+    <!doctype html>
+    <html lang="nl">
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Baan overnemen</title>
+        <style>
+          :root {{ --bg:#f6f7f8; --surface:#fff; --line:#d8dde3; --text:#171a1f; --muted:#66707f; --accent:#0f766e; --danger:#b42318; }}
+          * {{ box-sizing: border-box; }}
+          body {{ margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
+          main {{ width: min(620px, calc(100% - 32px)); margin: 32px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }}
+          h1 {{ margin: 0 0 12px; font-size: 26px; line-height: 1.15; }}
+          h2 {{ margin: 18px 0 10px; font-size: 16px; }}
+          p {{ color: var(--muted); line-height: 1.5; }}
+          .warning {{ border: 1px solid #f1c7c2; border-radius: 7px; background: #fff7f6; color: var(--text); padding: 12px; margin: 14px 0; }}
+          .notice {{ color: var(--text); }}
+          .meta {{ display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 14px; margin-bottom: 14px; }}
+          .meta span {{ display: block; color: var(--muted); font-size: 13px; }}
+          .meta strong {{ display: block; margin-top: 3px; color: var(--text); }}
+          ul {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }}
+          li {{ display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 10px; }}
+          button {{ border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }}
+          .danger {{ background: var(--danger); border-color: var(--danger); color: white; margin-top: 16px; width: 100%; }}
+          .status {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fff; color: var(--text); }}
+          @media (max-width: 520px) {{ main {{ width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; }} li {{ grid-template-columns: 1fr; }} }}
+        </style>
+      </head>
+      <body>
+        <main>
+          <h1>Baan overnemen</h1>
+          <p>Deze baan kan door jou worden overgenomen. Annuleer de baan alleen als je direct daarna zelf in de David Lloyd app opnieuw gaat boeken.</p>
+          <div class="warning"><strong>Let op:</strong> zodra je annuleert komt de baan vrij. Boek direct opnieuw met de spelers hieronder, anders kan iemand anders de baan reserveren.</div>
+          <div class="meta">
+            <div><span>Ontvanger</span><strong>{escape(str(recipient.get("fullName") or "-"))}</strong></div>
+            <div><span>Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
+            <div><span>Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))} - Court {escape(str(booking.get("courtId") or "-"))}</strong></div>
+            <div><span>Status</span><strong class="status">{escape(status)}</strong></div>
+          </div>
+          {notice}
+          <h2>Spelers om opnieuw toe te voegen</h2>
+          <ul>{participant_rows or "<li><span>Geen spelers opgegeven.</span></li>"}</ul>
+          {action_html}
+        </main>
+        <script>
+          document.querySelectorAll("[data-copy]").forEach((button) => {{
+            button.addEventListener("click", async () => {{
+              await navigator.clipboard.writeText(button.dataset.copy || "");
+              button.textContent = "Gekopieerd";
+              setTimeout(() => button.textContent = "Kopieer naam", 1200);
+            }});
+          }});
+        </script>
+      </body>
+    </html>
+    """
+    return HTMLResponse(body, status_code=status_code)
+
+
 def invite_message_templates(config: AppConfig) -> list[str]:
     templates = [template.strip() for template in config.padel.invite_message_templates if template.strip()]
     if templates:
@@ -423,6 +514,15 @@ def format_invite_message(template: str, *, booking: dict[str, Any], player: dic
         return template.format(**values)
     except KeyError as exc:
         raise HTTPException(status_code=400, detail=f"Unknown invite template placeholder: {exc}") from exc
+
+
+def format_takeover_message(*, booking: dict[str, Any], recipient: dict[str, Any], takeover_url: str) -> str:
+    return (
+        f"Baan overnemen: {format_date_nl(booking.get('date'))} om {format_time_nl(booking.get('startTime'))} "
+        f"bij {booking.get('clubName') or 'David Lloyd'}.\n\n"
+        "Open de link, annuleer de baan en boek daarna direct zelf opnieuw met de spelers op de pagina:\n"
+        f"{takeover_url}"
+    )
 
 
 def normalize_phone_digits(phone: str | None) -> str:
@@ -544,6 +644,36 @@ def send_booking_invite(payload: SendInviteRequest, request: Request) -> dict:
     return {"ok": True, "invite": get_invite(invite["token"]), "whatsapp": send_results, "inviteUrl": invite_url}
 
 
+@app.post("/bookings/takeovers/send")
+def send_booking_takeover(payload: SendTakeoverRequest, request: Request) -> dict:
+    recipient = payload.recipient.model_dump()
+    participants = [participant.model_dump() for participant in payload.participants]
+    if not recipient.get("phone"):
+        raise HTTPException(status_code=400, detail="Recipient has no phone number")
+    if not participants:
+        raise HTTPException(status_code=400, detail="Takeover needs at least one participant")
+    invite = create_invite(
+        encoded_booking_reference=payload.encodedBookingReference,
+        player=recipient,
+        booking=payload.booking,
+    )
+    invite = update_invite(
+        invite["token"],
+        kind="takeover",
+        participants=participants,
+    )
+    takeover_url = str(request.url_for("takeover_page", token=invite["token"]))
+    message = format_takeover_message(booking=invite["booking"], recipient=recipient, takeover_url=takeover_url)
+    try:
+        send_result = whatsapp_manager.send_message(phone=recipient["phone"], message=message)
+    except (WhatsAppError, concurrent.futures.TimeoutError) as exc:
+        update_invite(invite["token"], status="send_failed", sendError=str(exc), messages=[message])
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    update_invite(invite["token"], status="sent", messageCount=1, messages=[message])
+    return {"ok": True, "invite": get_invite(invite["token"]), "whatsapp": send_result, "takeoverUrl": takeover_url}
+
+
 @app.get("/bookings/invites")
 def booking_invites() -> dict:
     return {"invites": read_invites()}
@@ -570,6 +700,37 @@ def invite_page(token: str) -> HTMLResponse:
     invite = update_invite(token, **changes)
     message = None if active_invite(invite) else "Deze uitnodiging is niet meer actief."
     return render_invite_page(invite, message=message)
+
+
+@app.get("/takeover/{token}", response_class=HTMLResponse)
+def takeover_page(token: str) -> HTMLResponse:
+    invite = get_invite(token)
+    if invite is None or invite.get("kind") != "takeover":
+        raise HTTPException(status_code=404, detail="Takeover not found")
+    changes: dict[str, Any] = {"openCount": int(invite.get("openCount") or 0) + 1}
+    if not invite.get("openedAt"):
+        changes["openedAt"] = datetime.now().isoformat(timespec="seconds")
+    invite = update_invite(token, **changes)
+    message = None if active_invite(invite) else "Deze overname-link is niet meer actief."
+    return render_takeover_page(invite, message=message)
+
+
+@app.post("/takeover/{token}/cancel", response_class=HTMLResponse)
+def takeover_cancel_booking(token: str) -> HTMLResponse:
+    invite = get_invite(token)
+    if invite is None or invite.get("kind") != "takeover":
+        raise HTTPException(status_code=404, detail="Takeover not found")
+    if not active_invite(invite):
+        return render_takeover_page(invite, message="Deze overname-link is al verwerkt of ingetrokken.", status_code=409)
+    try:
+        cancel_booking_by_ref(invite["encodedBookingReference"])
+        update_invite(token, status="cancelled_for_takeover", cancelledAt=datetime.now().isoformat(timespec="seconds"))
+        return render_takeover_page(
+            get_invite(token) or invite,
+            message="De baan is geannuleerd. Boek nu direct zelf opnieuw in de David Lloyd app met de spelers hieronder.",
+        )
+    except DavidLloydError as exc:
+        raise handle_error(exc) from exc
 
 
 @app.post("/invite/{token}/accept", response_class=HTMLResponse)

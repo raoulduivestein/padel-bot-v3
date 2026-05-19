@@ -2,6 +2,8 @@ const state = {
   config: null,
   phonebook: [],
   invites: [],
+  takeoverBooking: null,
+  takeoverParticipants: [],
 };
 
 const days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
@@ -31,6 +33,183 @@ function formatDateTimeNl(value) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(date);
+}
+
+function confirmModal({ title = "Bevestigen", message, confirmText = "Bevestigen", danger = false }) {
+  const backdrop = $("confirmModal");
+  const titleEl = $("confirmModalTitle");
+  const textEl = $("confirmModalText");
+  const cancelBtn = $("confirmModalCancel");
+  const closeBtn = $("confirmModalClose");
+  const confirmBtn = $("confirmModalConfirm");
+  titleEl.textContent = title;
+  textEl.textContent = message;
+  confirmBtn.textContent = confirmText;
+  confirmBtn.classList.toggle("danger-button", danger);
+  backdrop.hidden = false;
+  document.body.classList.add("modal-open");
+  confirmBtn.focus();
+
+  return new Promise((resolve) => {
+    const cleanup = (value) => {
+      backdrop.hidden = true;
+      document.body.classList.remove("modal-open");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+      closeBtn.removeEventListener("click", onCancel);
+      backdrop.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKeydown);
+      resolve(value);
+    };
+    const onConfirm = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onBackdrop = (event) => {
+      if (event.target === backdrop) cleanup(false);
+    };
+    const onKeydown = (event) => {
+      if (event.key === "Escape") cleanup(false);
+    };
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+    closeBtn.addEventListener("click", onCancel);
+    backdrop.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKeydown);
+  });
+}
+
+function closeTakeoverModal() {
+  $("takeoverModal").hidden = true;
+  document.body.classList.remove("modal-open");
+  state.takeoverBooking = null;
+  state.takeoverParticipants = [];
+}
+
+function renderTakeoverParticipants() {
+  const root = $("takeoverParticipants");
+  root.innerHTML = "";
+  const count = state.takeoverParticipants?.length || 0;
+
+  const summary = document.createElement("div");
+  summary.className = "takeover-count";
+  summary.textContent = `${count}/4 spelers geselecteerd`;
+  root.appendChild(summary);
+
+  if (!state.takeoverParticipants?.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "Geen spelers geselecteerd.";
+    root.appendChild(empty);
+  } else {
+    state.takeoverParticipants.forEach((player, index) => {
+      const row = document.createElement("div");
+      row.className = "takeover-participant";
+      const name = document.createElement("strong");
+      name.textContent = player.fullName || player.name || player.encodedContactId || "-";
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "danger";
+      remove.textContent = "Verwijder";
+      remove.addEventListener("click", () => {
+        state.takeoverParticipants.splice(index, 1);
+        renderTakeoverParticipants();
+      });
+      row.appendChild(name);
+      row.appendChild(remove);
+      root.appendChild(row);
+    });
+  }
+
+  renderTakeoverParticipantSearch(count);
+}
+
+function addTakeoverParticipant(player) {
+  if (!player?.encodedContactId) throw new Error("Player heeft geen encodedContactId.");
+  if ((state.takeoverParticipants || []).length >= 4) {
+    throw new Error("Een overname kan maximaal 4 spelers bevatten.");
+  }
+  if ((state.takeoverParticipants || []).some((item) => item.encodedContactId === player.encodedContactId)) {
+    throw new Error("Deze speler staat al in de overname.");
+  }
+  state.takeoverParticipants.push({
+    encodedContactId: player.encodedContactId,
+    fullName: player.fullName || player.name || player.encodedContactId,
+    memberReferenceNumber: player.memberReferenceNumber || null,
+    homeClubSiteId: player.homeClubSiteId ?? null,
+  });
+  renderTakeoverParticipants();
+  return `${player.fullName || "Speler"} toegevoegd aan overname.`;
+}
+
+function renderTakeoverParticipantSearch(count) {
+  const root = $("takeoverParticipantSearch");
+  if (!root) return;
+  if (count >= 4) {
+    root.innerHTML = '<p class="empty">Maximum van 4 spelers bereikt. Verwijder eerst een speler om iemand anders toe te voegen.</p>';
+    return;
+  }
+  renderSearchBox(root, {
+    placeholder: "Zoek speler op naam",
+    addLabel: "Toevoegen",
+    addedMessage: "Speler toegevoegd aan de overnamepagina.",
+    onAdd: (player) => addTakeoverParticipant(player),
+  });
+}
+
+function openTakeoverModal(booking) {
+  state.takeoverBooking = booking;
+  state.takeoverParticipants = (booking.players || [])
+    .filter((player) => player.encodedContactId)
+    .map((player) => ({
+      encodedContactId: player.encodedContactId,
+      fullName: player.name || player.fullName || player.encodedContactId,
+      memberReferenceNumber: player.memberReferenceNumber || null,
+      homeClubSiteId: player.homeClubSiteId ?? null,
+    }));
+
+  const select = $("takeoverRecipient");
+  const options = phonebookPlayersWithPhone();
+  select.innerHTML = "";
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = options.length ? "Kies ontvanger" : "Geen spelers met telefoonnummer";
+  select.appendChild(empty);
+  options.forEach((player) => {
+    const option = document.createElement("option");
+    option.value = player.encodedContactId;
+    option.textContent = `${player.fullName || player.encodedContactId} - ${player.phone}`;
+    select.appendChild(option);
+  });
+  renderTakeoverParticipants();
+  $("takeoverModal").hidden = false;
+  document.body.classList.add("modal-open");
+  select.focus();
+}
+
+async function sendTakeoverInvite() {
+  const booking = state.takeoverBooking;
+  if (!booking?.encodedBookingReference) throw new Error("Deze boeking mist encodedBookingReference.");
+  const recipientId = $("takeoverRecipient").value;
+  const recipient = phonebookPlayersWithPhone().find((player) => player.encodedContactId === recipientId);
+  if (!recipient) throw new Error("Kies eerst een ontvanger met telefoonnummer.");
+  if (!state.takeoverParticipants?.length) throw new Error("Laat minimaal een speler op de overnamepagina staan.");
+  setStatus("Overnamebericht versturen...");
+  $("takeoverModalSend").disabled = true;
+  try {
+    await requestJson("/bookings/takeovers/send", {
+      method: "POST",
+      body: JSON.stringify({
+        encodedBookingReference: booking.encodedBookingReference,
+        booking,
+        recipient,
+        participants: state.takeoverParticipants,
+      }),
+    });
+    closeTakeoverModal();
+    await loadBookings();
+    setStatus("Overnamebericht verstuurd.");
+  } finally {
+    $("takeoverModalSend").disabled = false;
+  }
 }
 
 function setStatus(message, isError = false) {
@@ -195,7 +374,7 @@ function addPlayerChip(root, player, options = {}) {
   });
 }
 
-function renderSearchBox(root, { placeholder, onAdd }) {
+function renderSearchBox(root, { placeholder, onAdd, addLabel = "Add", addedMessage = "Player toegevoegd. Klik Save om op te slaan." }) {
   root.innerHTML = "";
 
   const wrap = document.createElement("div");
@@ -226,7 +405,7 @@ function renderSearchBox(root, { placeholder, onAdd }) {
     setStatus("Players zoeken...");
     results.innerHTML = '<p class="empty">Zoeken...</p>';
     const payload = await requestJson(`/padel/players/search?q=${encodeURIComponent(query)}`);
-    renderSearchResults(results, payload.players || [], onAdd);
+    renderSearchResults(results, payload.players || [], onAdd, { addLabel, addedMessage });
     setStatus("Players geladen.");
   }
 
@@ -257,7 +436,7 @@ function renderSearchBox(root, { placeholder, onAdd }) {
   root.appendChild(results);
 }
 
-function renderSearchResults(root, players, onAdd) {
+function renderSearchResults(root, players, onAdd, options = {}) {
   if (!players.length) {
     root.innerHTML = '<p class="empty">Geen players gevonden.</p>';
     return;
@@ -281,12 +460,12 @@ function renderSearchResults(root, players, onAdd) {
 
     const add = document.createElement("button");
     add.type = "button";
-    add.textContent = "Add";
+    add.textContent = options.addLabel || "Add";
     add.addEventListener("click", async () => {
       try {
         add.disabled = true;
         const message = await Promise.resolve(onAdd(player));
-        setStatus(message || "Player toegevoegd. Klik Save om op te slaan.");
+        setStatus(options.addedMessage || message || "Player toegevoegd. Klik Save om op te slaan.");
       } catch (error) {
         setStatus(error.message, true);
       } finally {
@@ -625,7 +804,13 @@ async function cancelBooking(booking) {
     throw new Error("Deze boeking mist encodedBookingReference.");
   }
   const label = `${formatDateNl(booking.date)} ${formatTimeNl(booking.startTime)} - Court ${booking.courtId || "-"}`;
-  if (!window.confirm(`Weet je zeker dat je deze boeking wilt annuleren?\n\n${label}`)) {
+  const confirmed = await confirmModal({
+    title: "Boeking annuleren",
+    message: `Weet je zeker dat je deze boeking wilt annuleren? ${label}`,
+    confirmText: "Boeking annuleren",
+    danger: true,
+  });
+  if (!confirmed) {
     return null;
   }
   setStatus("Booking annuleren...");
@@ -649,6 +834,11 @@ function inviteStatusLabel(invite) {
   return `${status} - ${opened}`;
 }
 
+function invitePublicUrl(invite) {
+  const path = invite.kind === "takeover" ? "takeover" : "invite";
+  return `/${path}/${invite.token}`;
+}
+
 function renderBookingInvites(root, booking) {
   const invites = invitesForBooking(booking);
   root.innerHTML = "";
@@ -668,7 +858,7 @@ function renderBookingInvites(root, booking) {
     item.className = `invite-item invite-${invite.status || "unknown"}`;
     item.innerHTML = `
       <div>
-        <strong>${player.fullName || player.encodedContactId || "-"}</strong>
+        <strong>${player.fullName || player.encodedContactId || "-"}${invite.kind === "takeover" ? " - overname" : ""}</strong>
         <span>${inviteStatusLabel(invite)}</span>
         <span>Aangemaakt ${formatDateTimeNl(invite.createdAt)}${invite.openCount ? ` - ${invite.openCount}x geopend` : ""}</span>
       </div>
@@ -677,7 +867,7 @@ function renderBookingInvites(root, booking) {
     const actions = document.createElement("div");
     actions.className = "invite-actions";
     const open = document.createElement("a");
-    open.href = `/invite/${invite.token}`;
+    open.href = invitePublicUrl(invite);
     open.target = "_blank";
     open.rel = "noreferrer";
     open.textContent = "Open";
@@ -839,10 +1029,16 @@ function renderBookings(bookings) {
     cancel.addEventListener("click", () => {
       cancelBooking(booking).catch((error) => setStatus(error.message, true));
     });
+    const takeover = document.createElement("button");
+    takeover.type = "button";
+    takeover.textContent = "Baan overnemen";
+    takeover.disabled = booking.canMemberCancel === false;
+    takeover.addEventListener("click", () => openTakeoverModal(booking));
     const raw = document.createElement("details");
     raw.className = "booking-raw";
     raw.innerHTML = `<summary>Raw booking</summary><pre>${JSON.stringify(booking, null, 2)}</pre>`;
     actions.appendChild(save);
+    actions.appendChild(takeover);
     actions.appendChild(cancel);
     actions.appendChild(raw);
 
@@ -884,7 +1080,7 @@ function renderInvites(invites) {
       const canCancel = ["pending", "sent", "send_failed"].includes(invite.status);
       item.innerHTML = `
         <div>
-          <strong>${player.fullName || player.encodedContactId || "-"}</strong>
+          <strong>${player.fullName || player.encodedContactId || "-"}${invite.kind === "takeover" ? " - overname" : ""}</strong>
           <span>${formatDateNl(booking.date)} ${formatTimeNl(booking.startTime)} - Court ${booking.courtId || "-"}</span>
           <span>${invite.openedAt ? `Geopend ${formatDateTimeNl(invite.openedAt)}` : "Niet geopend"}</span>
           <code>${invite.token || ""}</code>
@@ -894,7 +1090,7 @@ function renderInvites(invites) {
       const actions = document.createElement("div");
       actions.className = "invite-actions";
       const open = document.createElement("a");
-      open.href = `/invite/${invite.token}`;
+      open.href = invitePublicUrl(invite);
       open.target = "_blank";
       open.rel = "noreferrer";
       open.textContent = "Open";
@@ -1096,6 +1292,12 @@ function bind() {
   $("whatsappQr").addEventListener("error", () => {
     setStatus("WhatsApp QR kon niet worden geladen.", true);
   });
+  $("takeoverModalClose").addEventListener("click", closeTakeoverModal);
+  $("takeoverModalCancel").addEventListener("click", closeTakeoverModal);
+  $("takeoverModal").addEventListener("click", (event) => {
+    if (event.target === $("takeoverModal")) closeTakeoverModal();
+  });
+  $("takeoverModalSend").addEventListener("click", () => sendTakeoverInvite().catch((error) => setStatus(error.message, true)));
   $("runNowBtn").addEventListener("click", () => runNow().catch((error) => {
     $("runResult").textContent = error.message;
     setStatus("Run mislukt.", true);

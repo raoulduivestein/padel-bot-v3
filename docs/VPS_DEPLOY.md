@@ -59,7 +59,7 @@ sudo systemctl status padel-bot.service
 
 De web UI luistert standaard op `127.0.0.1:18018`. Zet er bij voorkeur Nginx met basic auth voor.
 
-Gebruik `deploy/nginx-padel-bot.conf` als uitgangspunt. Die config houdt de tool zelf achter basic auth, maar laat `/invite/...` publiek bereikbaar zodat spelers zonder login kunnen accepteren of weigeren. De invite-token in de URL is de toegangssleutel.
+Gebruik `deploy/nginx-padel-bot.conf` als uitgangspunt. Die config houdt de tool zelf achter basic auth, maar laat `/invite/...` en `/takeover/...` publiek bereikbaar zodat spelers zonder login kunnen reageren. De token in de URL is de toegangssleutel.
 
 Open daarna de frontend, ga naar het WhatsApp-tabblad en scan de QR-code. De Chrome-sessie wordt bewaard in `state/whatsapp-selenium-profile`.
 
