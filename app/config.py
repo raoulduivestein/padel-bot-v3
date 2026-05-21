@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -11,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = ROOT / "config" / "config.json"
 STATE_DIR = ROOT / "state"
 STATE_PATH = STATE_DIR / "session.json"
+_STATE_WRITE_LOCK = threading.RLock()
 
 
 SignatureMode = Literal[
@@ -175,7 +179,13 @@ def read_state() -> dict:
 
 def write_state(state: dict) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = STATE_PATH.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as handle:
-        json.dump(state, handle, indent=2, sort_keys=True)
-    tmp.replace(STATE_PATH)
+    tmp = STATE_PATH.with_name(
+        f"{STATE_PATH.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+    )
+    with _STATE_WRITE_LOCK:
+        try:
+            with tmp.open("w", encoding="utf-8") as handle:
+                json.dump(state, handle, indent=2, sort_keys=True)
+            tmp.replace(STATE_PATH)
+        finally:
+            tmp.unlink(missing_ok=True)

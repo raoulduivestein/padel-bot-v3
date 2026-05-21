@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -44,6 +45,7 @@ class DavidLloydClient:
         self.config = config
         self.http = requests.Session()
         self.http.trust_env = False
+        self._state_lock = threading.RLock()
 
     def status(self) -> dict:
         state = read_state()
@@ -121,9 +123,10 @@ class DavidLloydClient:
         return self.mobile_get("/players", params={"search": search})
 
     def mobile_get(self, path: str, *, params: dict[str, Any] | None = None) -> dict:
-        state = read_state()
-        self._ensure_valid_auth_state(state)
-        write_state(state)
+        with self._state_lock:
+            state = read_state()
+            self._ensure_valid_auth_state(state)
+            write_state(state)
 
         request = requests.Request("GET", f"{MOBILE_BASE}{path}", params=params).prepare()
         url = request.url or f"{MOBILE_BASE}{path}"
@@ -149,9 +152,10 @@ class DavidLloydClient:
         return self._mobile_body_request("PUT", path, payload=payload)
 
     def _mobile_body_request(self, method: str, path: str, *, payload: dict[str, Any]) -> dict:
-        state = read_state()
-        self._ensure_valid_auth_state(state)
-        write_state(state)
+        with self._state_lock:
+            state = read_state()
+            self._ensure_valid_auth_state(state)
+            write_state(state)
 
         url = f"{MOBILE_BASE}{path}"
         body = self._compact_json(payload)
