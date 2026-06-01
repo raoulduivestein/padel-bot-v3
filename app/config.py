@@ -28,6 +28,7 @@ SignatureMode = Literal[
 class MemberConfig(BaseModel):
     member_id: str
     name: str
+    plays: bool = True
 
 
 class BookingRule(BaseModel):

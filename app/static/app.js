@@ -17,6 +17,13 @@ function formatDateNl(value) {
   return String(value);
 }
 
+function formatWeekdayNl(value) {
+  if (!value) return "-";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return "-";
+  return new Intl.DateTimeFormat("nl-NL", { weekday: "long" }).format(date);
+}
+
 function formatTimeNl(value) {
   if (!value) return "-";
   return String(value).slice(0, 5);
@@ -157,7 +164,7 @@ function renderTakeoverParticipantSearch(count) {
 
 function openTakeoverModal(booking) {
   state.takeoverBooking = booking;
-  state.takeoverParticipants = (booking.players || [])
+  state.takeoverParticipants = effectiveBookingPlayers(booking.players || [])
     .filter((player) => player.encodedContactId)
     .map((player) => ({
       encodedContactId: player.encodedContactId,
@@ -359,6 +366,15 @@ function renderPlayerChip(root, { playerId, name, className, onRemove }) {
   root.appendChild(chip);
 }
 
+function nonPlayingMemberIds() {
+  return new Set((state.config?.padel?.members || []).filter((member) => member.plays === false).map((member) => member.member_id));
+}
+
+function effectiveBookingPlayers(players) {
+  const ignored = nonPlayingMemberIds();
+  return (players || []).filter((player) => !ignored.has(player.encodedContactId));
+}
+
 function addPlayerChip(root, player, options = {}) {
   const playerId = player.encodedContactId;
   if (!playerId) throw new Error("Player heeft geen encodedContactId.");
@@ -489,11 +505,34 @@ function renderMembers(members) {
   root.innerHTML = "";
   members.forEach((member) => {
     ensureKnownPlayers()[member.member_id] = member.name;
+    const before = root.children.length;
     renderPlayerChip(root, { playerId: member.member_id, name: member.name, className: "member-player" });
+    const chip = root.children[before];
+    chip.dataset.plays = member.plays === false ? "false" : "true";
+    const toggle = document.createElement("label");
+    toggle.className = "member-plays-toggle";
+    toggle.innerHTML = `<input type="checkbox" ${member.plays === false ? "" : "checked"}> Speelt mee`;
+    toggle.querySelector("input").addEventListener("change", (event) => {
+      chip.dataset.plays = event.target.checked ? "true" : "false";
+      renderRunSummary(collectForm());
+    });
+    chip.querySelector("div").appendChild(toggle);
   });
   renderSearchBox($("memberSearch"), {
     placeholder: "Search member",
-    onAdd: (player) => addPlayerChip(root, player, { className: "member-player", validate: validateMemberPlayerAllowed }),
+    onAdd: (player) => {
+      addPlayerChip(root, player, { className: "member-player", validate: validateMemberPlayerAllowed });
+      const chip = root.lastElementChild;
+      chip.dataset.plays = "true";
+      const toggle = document.createElement("label");
+      toggle.className = "member-plays-toggle";
+      toggle.innerHTML = '<input type="checkbox" checked> Speelt mee';
+      toggle.querySelector("input").addEventListener("change", (event) => {
+        chip.dataset.plays = event.target.checked ? "true" : "false";
+        renderRunSummary(collectForm());
+      });
+      chip.querySelector("div").appendChild(toggle);
+    },
   });
 }
 
@@ -603,6 +642,7 @@ function collectForm() {
   const members = [...$("members").querySelectorAll(".player-chip")].map((chip) => ({
     name: chip.dataset.name || chip.textContent.trim(),
     member_id: chip.dataset.playerId,
+    plays: chip.dataset.plays !== "false",
   })).filter((member) => member.name && member.member_id);
 
   const alwaysAddPlayerIds = [...$("alwaysPlayers").querySelectorAll(".player-chip")]
@@ -764,10 +804,11 @@ async function loadRunHistory() {
 }
 
 function formatBookingTitle(booking) {
+  const weekday = formatWeekdayNl(booking.date);
   const date = formatDateNl(booking.date);
   const time = formatTimeNl(booking.startTime);
   const court = booking.courtId ? `Court ${booking.courtId}` : "Court -";
-  return `${date} ${time} - ${court}`;
+  return `${weekday} ${date} ${time} - ${court}`;
 }
 
 function bookingDurationLabel(booking) {
@@ -849,8 +890,15 @@ function inviteStatusLabel(invite) {
 }
 
 function invitePublicUrl(invite) {
-  const path = invite.kind === "takeover" ? "takeover" : "invite";
+  const path = invite.kind === "takeover" ? "takeover" : invite.kind === "signup" ? "signup" : invite.kind === "player_signup" ? "signup/player" : "invite";
   return `/${path}/${invite.token}`;
+}
+
+function inviteKindLabel(invite) {
+  if (invite.kind === "takeover") return " - overname";
+  if (invite.kind === "signup") return " - inschrijving";
+  if (invite.kind === "player_signup") return " - spelerlink";
+  return "";
 }
 
 function renderBookingInvites(root, booking) {
@@ -872,7 +920,7 @@ function renderBookingInvites(root, booking) {
     item.className = `invite-item invite-${invite.status || "unknown"}`;
     item.innerHTML = `
       <div>
-        <strong>${player.fullName || player.encodedContactId || "-"}${invite.kind === "takeover" ? " - overname" : ""}</strong>
+        <strong>${player.fullName || player.encodedContactId || "-"}${inviteKindLabel(invite)}</strong>
         <span>${inviteStatusLabel(invite)}</span>
         <span>Aangemaakt ${formatDateTimeNl(invite.createdAt)}${invite.openCount ? ` - ${invite.openCount}x geopend` : ""}</span>
       </div>
@@ -904,8 +952,11 @@ function renderBookingInvites(root, booking) {
   });
 }
 
-function renderBookingPlayers(root, players) {
+function renderBookingPlayers(root, booking) {
   root.innerHTML = "";
+  const ignored = nonPlayingMemberIds();
+  const bookedMemberId = booking.bookedMemberEncodedContactId;
+  const players = booking.players || [];
   (players || []).forEach((player) => {
     if (!player.encodedContactId) return;
     const normalized = {
@@ -915,11 +966,19 @@ function renderBookingPlayers(root, players) {
       homeClubSiteId: player.homeClubSiteId ?? null,
     };
     rememberPlayer(normalized);
+    const before = root.children.length;
     renderPlayerChip(root, {
       playerId: normalized.encodedContactId,
-      name: normalized.fullName,
-      className: "booking-player",
+      name: `${normalized.fullName}${ignored.has(normalized.encodedContactId) ? " (boeker/niet spelend)" : ""}`,
+      className: `booking-player ${ignored.has(normalized.encodedContactId) ? "non-playing-booker" : ""}`,
     });
+    const chip = root.children[before];
+    if (ignored.has(normalized.encodedContactId) && normalized.encodedContactId === bookedMemberId) {
+      chip.dataset.lockedBooker = "true";
+      const remove = chip.querySelector("button");
+      remove.disabled = true;
+      remove.textContent = "Boeker";
+    }
   });
 }
 
@@ -943,13 +1002,13 @@ function renderBookings(bookings) {
       </div>
       <div class="booking-metrics">
         <span>${bookingDurationLabel(booking)}</span>
-        <span>${booking.players?.length || 0} players</span>
+        <span>${effectiveBookingPlayers(booking.players).length || 0}/4 spelers</span>
       </div>
     `;
 
     const playersRoot = document.createElement("div");
     playersRoot.className = "booking-players";
-    renderBookingPlayers(playersRoot, booking.players || []);
+    renderBookingPlayers(playersRoot, booking);
 
     const editor = document.createElement("div");
     editor.className = "booking-editor";
@@ -981,14 +1040,14 @@ function renderBookings(bookings) {
     const inviteButton = document.createElement("button");
     inviteButton.type = "button";
     inviteButton.textContent = "Send WhatsApp invite";
-    inviteButton.disabled = bookingPlayerIds(playersRoot).length >= 4;
+    inviteButton.disabled = effectiveBookingPlayers(booking.players).length >= 4;
     inviteButton.addEventListener("click", async () => {
       const player = inviteOptions.find((item) => item.encodedContactId === select.value);
       if (!player) {
         setStatus("Selecteer eerst een speler met telefoonnummer.", true);
         return;
       }
-      if (bookingPlayerIds(playersRoot).length >= 4) {
+      if (effectiveBookingPlayers(booking.players).length >= 4) {
         setStatus("Deze boeking heeft al 4 spelers.", true);
         return;
       }
@@ -1094,8 +1153,8 @@ function renderInvites(invites) {
       const canCancel = ["pending", "sent", "send_failed"].includes(invite.status);
       item.innerHTML = `
         <div>
-          <strong>${player.fullName || player.encodedContactId || "-"}${invite.kind === "takeover" ? " - overname" : ""}</strong>
-          <span>${formatDateNl(booking.date)} ${formatTimeNl(booking.startTime)} - Court ${booking.courtId || "-"}</span>
+          <strong>${player.fullName || player.encodedContactId || "-"}${inviteKindLabel(invite)}</strong>
+          <span>${formatWeekdayNl(booking.date)} ${formatDateNl(booking.date)} ${formatTimeNl(booking.startTime)} - Court ${booking.courtId || "-"}</span>
           <span>${invite.openedAt ? `Geopend ${formatDateTimeNl(invite.openedAt)}` : "Niet geopend"}</span>
           <code>${invite.token || ""}</code>
         </div>
@@ -1236,8 +1295,40 @@ function renderPhonebook(players) {
       setStatus("Phonebook opgeslagen.");
     });
 
+    const actions = document.createElement("div");
+    actions.className = "phonebook-actions";
+    const signupButton = document.createElement("button");
+    signupButton.type = "button";
+    signupButton.textContent = "Kopieer inschrijflink";
+    signupButton.disabled = !player.encodedContactId;
+    signupButton.addEventListener("click", async () => {
+      setStatus("Inschrijflink maken...");
+      signupButton.disabled = true;
+      try {
+        const result = await requestJson("/players/signup-link", {
+          method: "POST",
+          body: JSON.stringify({
+            encodedContactId: player.encodedContactId,
+            fullName: fields.querySelector('[data-field="name"]').value || player.fullName,
+            phone: fields.querySelector('[data-field="phone"]').value || player.phone,
+            memberReferenceNumber: player.memberReferenceNumber,
+            homeClubSiteId: player.homeClubSiteId,
+          }),
+        });
+        const url = new URL(result.signupUrl || invitePublicUrl(result.invite), window.location.origin).toString();
+        await navigator.clipboard.writeText(url);
+        setStatus(`Inschrijflink gekopieerd voor ${player.fullName || player.encodedContactId}.`);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        signupButton.disabled = false;
+      }
+    });
+    actions.appendChild(signupButton);
+
     item.appendChild(title);
     item.appendChild(fields);
+    item.appendChild(actions);
     root.appendChild(item);
   });
 }

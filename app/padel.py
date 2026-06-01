@@ -187,7 +187,7 @@ class PadelBookingService:
         configured_ids = [
             member.member_id
             for member in self.config.members
-            if member.member_id != booked_member_id
+            if member.member_id != booked_member_id and member.plays
         ]
 
         for player_id in [*configured_ids, *self.config.always_add_player_ids, *rule_player_ids]:

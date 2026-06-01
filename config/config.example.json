@@ -21,11 +21,13 @@
     "members": [
       {
         "member_id": "bUpDTmkxR2kwMDZWNUk2SVQ5QithUQ==",
-        "name": "Raoul"
+        "name": "Raoul",
+        "plays": true
       },
       {
         "member_id": "ZktCelEvaGFZRStuaW9kNUE0cytpdw==",
-        "name": "Senn"
+        "name": "Senn",
+        "plays": false
       }
     ],
     "known_players": {

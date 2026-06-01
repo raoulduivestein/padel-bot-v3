@@ -304,6 +304,24 @@ button:hover {
   overflow-wrap: anywhere;
 }
 
+.member-plays-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.member-plays-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+.non-playing-booker {
+  border-style: dashed;
+  background: #fff8e6;
+}
+
 .inline-player-search {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) auto;
@@ -609,6 +627,12 @@ pre {
   align-items: end;
 }
 
+.phonebook-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .search-grid {
   display: grid;
   grid-template-columns: minmax(220px, 1fr) minmax(220px, 0.8fr) auto;
@@ -901,6 +925,7 @@ pre {
   .search-grid,
   .phonebook-item,
   .phonebook-fields,
+  .phonebook-actions,
   .booking-invite,
   .booking-players,
   .invite-item,
@@ -912,6 +937,7 @@ pre {
 
   .actions,
   .inline,
+  .phonebook-actions,
   .modal-actions,
   .takeover-participant {
     align-items: stretch;
@@ -931,6 +957,7 @@ pre {
   .booking-actions details,
   .invite-actions,
   .invite-actions > *,
+  .phonebook-actions button,
   .modal-actions button {
     width: 100%;
   }
