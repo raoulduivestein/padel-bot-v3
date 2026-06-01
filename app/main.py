@@ -434,10 +434,11 @@ def update_ids_for_signup(booking: dict[str, Any], player_id: str) -> tuple[list
 def player_signup_open_groups(player_id: str) -> list[dict[str, Any]]:
     data = client().bookings()
     raw_bookings = data.get("bookings", []) if isinstance(data, dict) else []
-    bookings = [
-        normalize_booking(booking)
-        for booking in raw_bookings
-    ]
+    bookings = [normalize_booking(booking) for booking in raw_bookings]
+    return player_signup_open_groups_from_bookings(player_id, bookings)
+
+
+def player_signup_open_groups_from_bookings(player_id: str, bookings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates = [
         booking
         for booking in bookings
@@ -488,6 +489,7 @@ def player_signup_open_groups(player_id: str) -> list[dict[str, Any]]:
         groups.append({
             "id": group[0]["encodedBookingReference"],
             "date": group[0].get("date"),
+            "dateNl": format_date_nl(group[0].get("date")),
             "weekday": format_weekday_nl(group[0].get("date")),
             "startTime": group[0].get("startTime"),
             "endTime": (
@@ -499,6 +501,136 @@ def player_signup_open_groups(player_id: str) -> list[dict[str, Any]]:
             "playerCounts": [len(effective_booking_player_ids(item)) for item in group],
         })
     return groups
+
+
+def player_signup_existing_groups(invite: dict[str, Any], player_id: str, bookings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    by_ref = {
+        booking.get("encodedBookingReference"): booking
+        for booking in bookings
+        if booking.get("encodedBookingReference")
+    }
+    groups: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for signup in invite.get("signups") or []:
+        if signup.get("cancelledAt"):
+            continue
+        signup_bookings = [
+            by_ref[ref]
+            for ref in signup.get("bookingReferences") or []
+            if ref in by_ref
+        ]
+        if not signup_bookings:
+            continue
+        signup_bookings.sort(key=lambda booking: booking_start_datetime(booking) or datetime.max)
+        first_booking = signup_bookings[0]
+        last_booking = signup_bookings[-1]
+        first_start = booking_start_datetime(first_booking)
+        if first_start is None:
+            continue
+        for booking in signup_bookings:
+            if booking.get("encodedBookingReference"):
+                seen.add(booking["encodedBookingReference"])
+        cancel_deadline = first_start - timedelta(hours=72)
+        can_cancel = datetime.now() <= cancel_deadline
+        groups.append({
+            "id": first_booking.get("encodedBookingReference"),
+            "date": first_booking.get("date"),
+            "dateNl": format_date_nl(first_booking.get("date")),
+            "weekday": format_weekday_nl(first_booking.get("date")),
+            "startTime": first_booking.get("startTime"),
+            "endTime": (
+                booking_start_datetime(last_booking) + timedelta(minutes=booking_duration_minutes(last_booking))
+            ).strftime("%H:%M") if booking_start_datetime(last_booking) else format_time_nl(last_booking.get("startTime")),
+            "clubName": first_booking.get("clubName"),
+            "courtId": first_booking.get("courtId"),
+            "bookings": signup_bookings,
+            "bookingReferences": [booking.get("encodedBookingReference") for booking in signup_bookings],
+            "joinedAt": signup.get("joinedAt"),
+            "canCancel": can_cancel,
+            "cancelUntil": cancel_deadline.isoformat(timespec="seconds"),
+        })
+
+    live_bookings = [
+        booking
+        for booking in bookings
+        if booking.get("encodedBookingReference")
+        and player_id in effective_booking_player_ids(booking)
+        and booking_start_datetime(booking) is not None
+    ]
+    live_bookings.sort(key=lambda booking: (
+        booking.get("date") or "",
+        booking.get("clubName") or "",
+        booking.get("courtId") or 0,
+        booking.get("startTime") or "",
+    ))
+    for booking in live_bookings:
+        ref = booking.get("encodedBookingReference")
+        if not ref or ref in seen:
+            continue
+        group = [booking]
+        seen.add(ref)
+        current = booking
+        while True:
+            current_start = booking_start_datetime(current)
+            if current_start is None:
+                break
+            next_start = current_start + timedelta(minutes=booking_duration_minutes(current))
+            next_booking = next(
+                (
+                    item
+                    for item in live_bookings
+                    if item.get("encodedBookingReference") not in seen
+                    and item.get("date") == current.get("date")
+                    and item.get("courtId") == current.get("courtId")
+                    and (item.get("clubName") or "") == (current.get("clubName") or "")
+                    and booking_start_datetime(item) == next_start
+                ),
+                None,
+            )
+            if next_booking is None:
+                break
+            group.append(next_booking)
+            seen.add(next_booking["encodedBookingReference"])
+            current = next_booking
+
+        first_booking = group[0]
+        last_booking = group[-1]
+        first_start = booking_start_datetime(first_booking)
+        if first_start is None:
+            continue
+        cancel_deadline = first_start - timedelta(hours=72)
+        groups.append({
+            "id": first_booking.get("encodedBookingReference"),
+            "date": first_booking.get("date"),
+            "dateNl": format_date_nl(first_booking.get("date")),
+            "weekday": format_weekday_nl(first_booking.get("date")),
+            "startTime": first_booking.get("startTime"),
+            "endTime": (
+                booking_start_datetime(last_booking) + timedelta(minutes=booking_duration_minutes(last_booking))
+            ).strftime("%H:%M") if booking_start_datetime(last_booking) else format_time_nl(last_booking.get("startTime")),
+            "clubName": first_booking.get("clubName"),
+            "courtId": first_booking.get("courtId"),
+            "bookings": group,
+            "bookingReferences": [item.get("encodedBookingReference") for item in group],
+            "joinedAt": None,
+            "canCancel": datetime.now() <= cancel_deadline,
+            "cancelUntil": cancel_deadline.isoformat(timespec="seconds"),
+        })
+    return groups
+
+
+def player_signup_payload(invite: dict[str, Any]) -> dict[str, Any]:
+    player_id = (invite.get("player") or {}).get("encodedContactId")
+    if not player_id:
+        raise HTTPException(status_code=400, detail="Signup player has no encodedContactId")
+    data = client().bookings()
+    raw_bookings = data.get("bookings", []) if isinstance(data, dict) else []
+    bookings = [normalize_booking(booking) for booking in raw_bookings]
+    return {
+        "player": invite.get("player") or {},
+        "openGroups": player_signup_open_groups_from_bookings(player_id, bookings),
+        "signedUpGroups": player_signup_existing_groups(invite, player_id, bookings),
+    }
 
 
 def update_booking_players_with_ids(encoded_booking_reference: str, player_ids: list[str]) -> dict:
@@ -762,23 +894,6 @@ def render_player_signup_page(
     status_code: int = 200,
 ) -> HTMLResponse:
     player = invite.get("player") or {}
-    rows = "\n".join(
-        f"""
-        <li>
-          <div>
-            <strong>{escape(str(group.get("weekday") or "-").capitalize())} {escape(format_date_nl(group.get("date")))} om {escape(format_time_nl(group.get("startTime")))} - {escape(format_time_nl(group.get("endTime")))}</strong>
-            <span>{escape(str(group.get("clubName") or "David Lloyd"))} - Court {escape(str(group.get("courtId") or "-"))} - {len(group.get("bookings") or [])} uur/blok</span>
-            <span>Bezetting: {escape(", ".join(f"{count}/4" for count in group.get("playerCounts") or []))}</span>
-          </div>
-          <form method="post" action="/signup/player/{invite["token"]}/join/{quote(str(group.get("id") or ""), safe="")}">
-            <button class="primary" type="submit">Inschrijven</button>
-          </form>
-        </li>
-        """
-        for group in groups
-    )
-    if not rows:
-        rows = "<li><div><strong>Geen open wedstrijden</strong><span>Er zijn nu geen geboekte wedstrijden met vrije plekken.</span></div></li>"
     notice = f"<p class='notice'>{escape(message)}</p>" if message else ""
     body = f"""
     <!doctype html>
@@ -793,12 +908,26 @@ def render_player_signup_page(
           body {{ margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
           main {{ width: min(680px, calc(100% - 32px)); margin: 40px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }}
           h1 {{ margin: 0 0 12px; font-size: 26px; line-height: 1.15; }}
+          h2 {{ margin: 22px 0 8px; font-size: 18px; }}
           p {{ color: var(--muted); line-height: 1.5; }}
           .notice {{ color: var(--text); }}
+          .loader {{ display: grid; justify-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 20px; margin: 16px 0; transition: opacity .18s ease, transform .18s ease; }}
+          .loader.is-done {{ opacity: 0; transform: translateY(-4px); }}
+          .loader-icons {{ display: flex; min-height: 38px; align-items: center; gap: 12px; font-size: 30px; }}
+          .loader-icons span {{ opacity: .18; transform: scale(.82); transition: opacity .18s ease, transform .18s ease; }}
+          .loader-icons span.active {{ opacity: 1; transform: scale(1.16); }}
           ul {{ list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 10px; }}
           li {{ display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 12px; }}
           li span {{ display: block; margin-top: 4px; color: var(--muted); }}
           button {{ border: 1px solid var(--accent); border-radius: 7px; padding: 10px 14px; background: var(--accent); color: white; cursor: pointer; font: inherit; }}
+          button.secondary {{ border-color: var(--line); background: white; color: var(--text); }}
+          .modal-backdrop {{ position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 18px; background: rgba(15,23,42,.45); }}
+          .modal-backdrop[hidden] {{ display: none; }}
+          .modal {{ width: min(430px, 100%); border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 18px 45px rgba(15,23,42,.2); padding: 18px; }}
+          .modal h2 {{ margin: 0 0 8px; }}
+          .modal p {{ margin: 0 0 16px; }}
+          .modal-actions {{ display: flex; gap: 10px; justify-content: flex-end; }}
+          .danger {{ border-color: #b42318; background: #b42318; color: white; }}
           @media (max-width: 560px) {{ main {{ width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; }} li {{ grid-template-columns: 1fr; }} button {{ width: 100%; }} }}
         </style>
       </head>
@@ -807,8 +936,170 @@ def render_player_signup_page(
           <h1>🎾 Inschrijven voor padel</h1>
           <p>Hoi <strong>{escape(first_name(player.get("fullName")))}</strong>, kies hieronder een geboekte wedstrijd met vrije plekken. Als de wedstrijd uit twee aansluitende uren bestaat, schrijf je je direct voor beide uren in.</p>
           {notice}
-          <ul>{rows}</ul>
+          <div id="loader" class="loader">
+            <div id="loaderIcons" class="loader-icons" aria-hidden="true">
+              <span>&#127934;</span><span>&#127939;</span><span>&#127934;</span>
+            </div>
+            <strong>Wedstrijden laden...</strong>
+            <span>Even wachten, de padelbanen worden opgehaald.</span>
+          </div>
+          <section>
+            <h2>Jouw inschrijvingen</h2>
+            <ul id="signedUpList"></ul>
+          </section>
+          <section>
+            <h2>Open wedstrijden</h2>
+            <ul id="openList"></ul>
+          </section>
         </main>
+        <div id="confirmModal" class="modal-backdrop" hidden>
+          <section class="modal" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+            <h2 id="confirmTitle">Bevestigen</h2>
+            <p id="confirmText"></p>
+            <div class="modal-actions">
+              <button id="confirmCancel" class="secondary" type="button">Terug</button>
+              <button id="confirmSubmit" class="primary" type="button">Bevestigen</button>
+            </div>
+          </section>
+        </div>
+        <script>
+          const token = {invite["token"]!r};
+          const loader = document.getElementById("loader");
+          const loaderIcons = [...document.querySelectorAll("#loaderIcons span")];
+          const openList = document.getElementById("openList");
+          const signedUpList = document.getElementById("signedUpList");
+          const confirmModal = document.getElementById("confirmModal");
+          const confirmTitle = document.getElementById("confirmTitle");
+          const confirmText = document.getElementById("confirmText");
+          const confirmCancel = document.getElementById("confirmCancel");
+          const confirmSubmit = document.getElementById("confirmSubmit");
+          let pendingForm = null;
+          let loaderIndex = 0;
+          const loaderTimer = window.setInterval(() => {{
+            loaderIcons.forEach((icon, index) => icon.classList.toggle("active", index === loaderIndex));
+            loaderIndex = (loaderIndex + 1) % loaderIcons.length;
+          }}, 260);
+
+          function escapeHtml(value) {{
+            return String(value ?? "").replace(/[&<>"']/g, (char) => ({{
+              "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+            }}[char]));
+          }}
+
+          function groupTitle(group) {{
+            const weekday = group.weekday ? group.weekday.charAt(0).toUpperCase() + group.weekday.slice(1) : "-";
+            return `${{weekday}} ${{group.dateNl || group.date || "-"}} om ${{group.startTime || "-"}} - ${{group.endTime || "-"}}`;
+          }}
+
+          function renderOpen(groups) {{
+            if (!groups.length) {{
+              openList.innerHTML = "<li><div><strong>Geen open wedstrijden</strong><span>Er zijn nu geen geboekte wedstrijden met vrije plekken.</span></div></li>";
+              return;
+            }}
+            openList.innerHTML = groups.map((group) => `
+              <li>
+                <div>
+                  <strong>${{escapeHtml(groupTitle(group))}}</strong>
+                  <span>${{escapeHtml(group.clubName || "David Lloyd")}} - Court ${{escapeHtml(group.courtId || "-")}} - ${{(group.bookings || []).length}} uur/blok</span>
+                  <span>Bezetting: ${{escapeHtml((group.playerCounts || []).map((count) => `${{count}}/4`).join(", "))}}</span>
+                </div>
+                <form method="post" action="/signup/player/${{encodeURIComponent(token)}}/join/${{encodeURIComponent(group.id || "")}}" data-confirm-kind="join" data-confirm-title="${{escapeHtml(groupTitle(group))}}">
+                  <button class="primary" type="submit">Inschrijven</button>
+                </form>
+              </li>
+            `).join("");
+          }}
+
+          function renderSignedUp(groups) {{
+            if (!groups.length) {{
+              signedUpList.innerHTML = "<li><div><strong>Nog geen inschrijvingen</strong><span>Je staat nog niet op een aankomende wedstrijd via deze link.</span></div></li>";
+              return;
+            }}
+            signedUpList.innerHTML = groups.map((group) => `
+              <li>
+                <div>
+                  <strong>${{escapeHtml(groupTitle(group))}}</strong>
+                  <span>${{escapeHtml(group.clubName || "David Lloyd")}} - Court ${{escapeHtml(group.courtId || "-")}}</span>
+                  <span>${{group.canCancel ? "Je kunt nog annuleren tot 72 uur vooraf." : "Annuleren kan niet meer binnen 72 uur voor start."}}</span>
+                </div>
+                ${{group.canCancel ? `
+                  <form method="post" action="/signup/player/${{encodeURIComponent(token)}}/cancel/${{encodeURIComponent(group.id || "")}}" data-confirm-kind="cancel" data-confirm-title="${{escapeHtml(groupTitle(group))}}">
+                    <button class="secondary" type="submit">Annuleren</button>
+                  </form>
+                ` : ""}}
+              </li>
+            `).join("");
+          }}
+
+          function stopLoader() {{
+            window.clearInterval(loaderTimer);
+            loader.classList.add("is-done");
+            window.setTimeout(() => {{
+              loader.hidden = true;
+              loader.remove();
+            }}, 180);
+          }}
+
+          function openConfirm(form) {{
+            pendingForm = form;
+            const kind = form.dataset.confirmKind;
+            const title = form.dataset.confirmTitle || "deze wedstrijd";
+            const isCancel = kind === "cancel";
+            confirmTitle.textContent = isCancel ? "Inschrijving annuleren?" : "Inschrijving bevestigen?";
+            confirmText.textContent = isCancel
+              ? `Weet je zeker dat je jouw inschrijving voor ${{title}} wilt annuleren?`
+              : `Wil je je inschrijven voor ${{title}}?`;
+            confirmSubmit.textContent = isCancel ? "Annuleren" : "Inschrijven";
+            confirmSubmit.className = isCancel ? "danger" : "primary";
+            confirmModal.hidden = false;
+          }}
+
+          function closeConfirm() {{
+            pendingForm = null;
+            confirmModal.hidden = true;
+          }}
+
+          document.addEventListener("submit", (event) => {{
+            const form = event.target.closest("form[data-confirm-kind]");
+            if (!form || form.dataset.confirmed === "true") return;
+            event.preventDefault();
+            openConfirm(form);
+          }});
+          confirmCancel.addEventListener("click", closeConfirm);
+          confirmModal.addEventListener("click", (event) => {{
+            if (event.target === confirmModal) closeConfirm();
+          }});
+          confirmSubmit.addEventListener("click", () => {{
+            if (!pendingForm) return;
+            pendingForm.dataset.confirmed = "true";
+            pendingForm.submit();
+          }});
+
+          async function loadData() {{
+            const controller = new AbortController();
+            const timeout = window.setTimeout(() => controller.abort(), 30000);
+            try {{
+              const response = await fetch(`/signup/player/${{encodeURIComponent(token)}}/data`, {{
+                headers: {{ "Accept": "application/json" }},
+                signal: controller.signal
+              }});
+              if (!response.ok) throw new Error(await response.text());
+              const data = await response.json();
+              renderSignedUp(data.signedUpGroups || []);
+              renderOpen(data.openGroups || []);
+            }} catch (error) {{
+              const message = error.name === "AbortError"
+                ? "Het laden duurt te lang. Vernieuw de pagina om opnieuw te proberen."
+                : (error.message || error);
+              openList.innerHTML = `<li><div><strong>Laden mislukt</strong><span>${{escapeHtml(message)}}</span></div></li>`;
+            }} finally {{
+              window.clearTimeout(timeout);
+              stopLoader();
+            }}
+          }}
+
+          loadData();
+        </script>
       </body>
     </html>
     """
@@ -1164,8 +1455,17 @@ def player_signup_page(token: str) -> HTMLResponse:
     player_id = (invite.get("player") or {}).get("encodedContactId")
     if not player_id:
         raise HTTPException(status_code=400, detail="Signup player has no encodedContactId")
-    groups = player_signup_open_groups(player_id)
-    return render_player_signup_page(invite, groups)
+    return render_player_signup_page(invite, [])
+
+
+@app.get("/signup/player/{token}/data")
+def player_signup_data(token: str) -> dict:
+    invite = get_invite(token)
+    if invite is None or invite.get("kind") != "player_signup":
+        raise HTTPException(status_code=404, detail="Signup link not found")
+    if invite.get("status") != ACTIVE_PLAYER_SIGNUP_STATUS:
+        raise HTTPException(status_code=409, detail="Signup link is not active")
+    return player_signup_payload(invite)
 
 
 @app.post("/takeover/{token}/cancel", response_class=HTMLResponse)
@@ -1274,6 +1574,69 @@ def reject_signup(token: str) -> HTMLResponse:
     return render_signup_page(get_invite(token) or invite, message="Je hebt de inschrijving geweigerd.")
 
 
+@app.post("/signup/player/{token}/cancel/{booking_reference:path}", response_class=HTMLResponse)
+def cancel_player_signup(token: str, booking_reference: str) -> HTMLResponse:
+    invite = get_invite(token)
+    if invite is None or invite.get("kind") != "player_signup":
+        raise HTTPException(status_code=404, detail="Signup link not found")
+    if invite.get("status") != ACTIVE_PLAYER_SIGNUP_STATUS:
+        raise HTTPException(status_code=409, detail="Signup link is not active")
+    player_id = (invite.get("player") or {}).get("encodedContactId")
+    if not player_id:
+        raise HTTPException(status_code=400, detail="Signup player has no encodedContactId")
+
+    signups = list(invite.get("signups") or [])
+    signup_index = next(
+        (
+            index
+            for index, signup in enumerate(signups)
+            if not signup.get("cancelledAt")
+            and booking_reference in (signup.get("bookingReferences") or [])
+        ),
+        None,
+    )
+    if signup_index is None:
+        base = find_booking(booking_reference)
+        if base is None or player_id not in effective_booking_player_ids(base):
+            return render_player_signup_page(invite, [], message="Deze inschrijving is niet gevonden.", status_code=404)
+        bookings = consecutive_bookings_for(base)
+        bookings = [
+            booking
+            for booking in bookings
+            if player_id in effective_booking_player_ids(booking)
+        ]
+    else:
+        bookings = [
+            find_booking(ref)
+            for ref in signups[signup_index].get("bookingReferences") or []
+        ]
+    bookings = [booking for booking in bookings if booking]
+    first_start = min((booking_start_datetime(booking) for booking in bookings), default=None)
+    if first_start is None:
+        return render_player_signup_page(invite, [], message="Deze wedstrijd bestaat niet meer.", status_code=404)
+    if datetime.now() > first_start - timedelta(hours=72):
+        return render_player_signup_page(
+            invite,
+            [],
+            message="Annuleren kan niet meer binnen 72 uur voor de start.",
+            status_code=409,
+        )
+
+    for booking in bookings:
+        ids = [
+            current_id
+            for current_id in booking_player_ids(booking)
+            if current_id != player_id
+        ]
+        if len(ids) != len(booking_player_ids(booking)):
+            update_booking_players_with_ids(booking["encodedBookingReference"], ids)
+
+    if signup_index is not None:
+        signups[signup_index]["cancelledAt"] = datetime.now().isoformat(timespec="seconds")
+        invite = update_invite(token, signups=signups)
+    return render_player_signup_page(invite, [], message="Je inschrijving is geannuleerd.")
+
+
 @app.post("/signup/player/{token}/join/{booking_reference:path}", response_class=HTMLResponse)
 def join_player_signup(token: str, booking_reference: str) -> HTMLResponse:
     invite = get_invite(token)
@@ -1287,8 +1650,7 @@ def join_player_signup(token: str, booking_reference: str) -> HTMLResponse:
 
     base = find_booking(booking_reference)
     if base is None:
-        groups = player_signup_open_groups(player_id)
-        return render_player_signup_page(invite, groups, message="Deze wedstrijd bestaat niet meer.", status_code=404)
+        return render_player_signup_page(invite, [], message="Deze wedstrijd bestaat niet meer.", status_code=404)
 
     group = consecutive_bookings_for(base)
     for booking in group:
@@ -1296,8 +1658,7 @@ def join_player_signup(token: str, booking_reference: str) -> HTMLResponse:
         if player_id in player_ids:
             continue
         if len(player_ids) >= 4:
-            groups = player_signup_open_groups(player_id)
-            return render_player_signup_page(invite, groups, message="Deze wedstrijd zit inmiddels vol.", status_code=409)
+            return render_player_signup_page(invite, [], message="Deze wedstrijd zit inmiddels vol.", status_code=409)
 
     updated = []
     not_added_to_david_lloyd = []
@@ -1320,11 +1681,10 @@ def join_player_signup(token: str, booking_reference: str) -> HTMLResponse:
         "bookingReferences": [booking.get("encodedBookingReference") for booking in updated],
     })
     invite = update_invite(token, signups=signups)
-    groups = player_signup_open_groups(player_id)
     if not_added_to_david_lloyd:
         return render_player_signup_page(
             invite,
-            groups,
+            [],
             message=(
                 "Je bent ingeschreven in de tool, maar nog niet toegevoegd in David Lloyd. "
                 "Er staat nog een niet-spelende boeker in de boeking. Dit moet later via overname/takeover worden rechtgezet."
@@ -1332,7 +1692,7 @@ def join_player_signup(token: str, booking_reference: str) -> HTMLResponse:
         )
     return render_player_signup_page(
         invite,
-        groups,
+        [],
         message=f"Je bent ingeschreven voor {len(updated)} uur/blok(ken).",
     )
 
