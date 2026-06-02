@@ -17,6 +17,18 @@ function formatDateNl(value) {
   return String(value);
 }
 
+function formatShortDateNl(value) {
+  if (!value) return "-";
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const formatted = new Intl.DateTimeFormat("nl-NL", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  }).format(date);
+  return formatted.charAt(0).toUpperCase() + formatted.slice(1);
+}
+
 function formatWeekdayNl(value) {
   if (!value) return "-";
   const date = new Date(`${value}T00:00:00`);
@@ -396,11 +408,21 @@ function effectiveBookingPlayers(players) {
   return (players || []).filter((player) => !ignored.has(player.encodedContactId));
 }
 
+function effectiveChipCount(root) {
+  const ignored = nonPlayingMemberIds();
+  return [...root.querySelectorAll(".player-chip")]
+    .filter((chip) => !ignored.has(chip.dataset.playerId))
+    .length;
+}
+
 function addPlayerChip(root, player, options = {}) {
   const playerId = player.encodedContactId;
   if (!playerId) throw new Error("Player heeft geen encodedContactId.");
   if (options.maxPlayers && root.querySelectorAll(".player-chip").length >= options.maxPlayers) {
     throw new Error(`Een boeking kan maximaal ${options.maxPlayers} spelers hebben.`);
+  }
+  if (options.maxEffectivePlayers && effectiveChipCount(root) >= options.maxEffectivePlayers) {
+    throw new Error(`Een boeking kan maximaal ${options.maxEffectivePlayers} spelende spelers hebben.`);
   }
   if ([...root.querySelectorAll(".player-chip")].some((chip) => chip.dataset.playerId === playerId)) {
     throw new Error("Deze player staat hier al.");
@@ -833,14 +855,89 @@ function formatBookingTitle(booking) {
   const weekday = formatWeekdayNl(booking.date);
   const date = formatDateNl(booking.date);
   const time = formatTimeNl(booking.startTime);
-  const court = booking.courtId ? `Court ${booking.courtId}` : "Court -";
+  const court = courtLabel(booking);
   return `${weekday} ${date} ${time} - ${court}`;
+}
+
+function bookingStatusBadge(status) {
+  const value = String(status || "-").toLowerCase();
+  const className = value === "confirmed" ? "confirmed" : value === "provisional" ? "provisional" : "neutral";
+  return `<span class="booking-status-badge ${className}">${value}</span>`;
 }
 
 function bookingDurationLabel(booking) {
   const duration = booking.duration;
   if (!duration) return "-";
   return `${duration} min`;
+}
+
+function bookingDurationMinutes(booking) {
+  const duration = Number.parseInt(booking.duration, 10);
+  return Number.isFinite(duration) && duration > 0 ? duration : 60;
+}
+
+function bookingStartDate(booking) {
+  if (!booking.date || !booking.startTime) return null;
+  const date = new Date(`${booking.date}T${String(booking.startTime).slice(0, 5)}:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function courtLabel(booking) {
+  const courtId = booking.courtId;
+  if (!courtId) return "baan -";
+  const aliases = state.config?.padel?.court_aliases || {};
+  return aliases[String(courtId)] || String(courtId);
+}
+
+function copyBlockDuration(booking, bookings) {
+  const start = bookingStartDate(booking);
+  if (!start) return bookingDurationMinutes(booking);
+  let total = bookingDurationMinutes(booking);
+  let currentEnd = new Date(start.getTime() + total * 60000);
+  const candidates = (bookings || [])
+    .filter((item) =>
+      item !== booking
+      && item.date === booking.date
+      && item.courtId === booking.courtId
+      && bookingStartDate(item)
+    )
+    .sort((a, b) => bookingStartDate(a) - bookingStartDate(b));
+
+  for (const candidate of candidates) {
+    const candidateStart = bookingStartDate(candidate);
+    if (candidateStart.getTime() === currentEnd.getTime()) {
+      const duration = bookingDurationMinutes(candidate);
+      total += duration;
+      currentEnd = new Date(currentEnd.getTime() + duration * 60000);
+    }
+  }
+  return total;
+}
+
+function bookingCopyText(booking, bookings) {
+  const heading = `${formatShortDateNl(booking.date)} ${formatTimeNl(booking.startTime)} ${copyBlockDuration(booking, bookings)}min ${courtLabel(booking)}`;
+  const players = effectiveBookingPlayers(booking.players || []).slice(0, 4);
+  const playerLines = Array.from({ length: 4 }, (_, index) => {
+    const player = players[index];
+    const name = String(player?.name || player?.fullName || "").trim().split(/\s+/)[0] || "";
+    return player ? `🎾 ${name}`.trimEnd() : "🎾";
+  });
+  return [heading, ...playerLines].join("\n");
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.style.position = "fixed";
+  area.style.left = "-9999px";
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand("copy");
+  area.remove();
 }
 
 function bookingPlayerIds(root) {
@@ -864,15 +961,19 @@ async function saveBookingPlayers(booking, playersRoot) {
   if (!booking.encodedBookingReference) {
     throw new Error("Deze boeking mist encodedBookingReference.");
   }
-  if (bookingPlayerIds(playersRoot).length > 4) {
-    throw new Error("Een boeking kan maximaal 4 spelers hebben.");
+  if (effectiveChipCount(playersRoot) > 4) {
+    throw new Error("Een boeking kan maximaal 4 spelende spelers hebben.");
   }
+  const allPlayerIds = bookingPlayerIds(playersRoot);
+  const davidLloydPlayerIds = allPlayerIds.slice(0, 4);
+  const toolOnlyPlayerIds = allPlayerIds.slice(4).filter((playerId) => !nonPlayingMemberIds().has(playerId));
   setStatus("Booking spelers opslaan...");
   const result = await requestJson("/padel/bookings/players", {
     method: "PUT",
     body: JSON.stringify({
       encodedBookingReference: booking.encodedBookingReference,
-      playersEncodedContactIds: bookingPlayerIds(playersRoot),
+      playersEncodedContactIds: davidLloydPlayerIds,
+      toolOnlyPlayerIds,
     }),
   });
   await loadBookings();
@@ -995,10 +1096,11 @@ function renderBookingPlayers(root, booking) {
     const before = root.children.length;
     renderPlayerChip(root, {
       playerId: normalized.encodedContactId,
-      name: `${normalized.fullName}${ignored.has(normalized.encodedContactId) ? " (boeker/niet spelend)" : ""}`,
-      className: `booking-player ${ignored.has(normalized.encodedContactId) ? "non-playing-booker" : ""}`,
+      name: `${normalized.fullName}${ignored.has(normalized.encodedContactId) ? " (boeker/niet spelend)" : ""}${player.toolOnly ? " (alleen tool)" : ""}`,
+      className: `booking-player ${ignored.has(normalized.encodedContactId) ? "non-playing-booker" : ""} ${player.toolOnly ? "tool-only-player" : ""}`,
     });
     const chip = root.children[before];
+    if (player.toolOnly) chip.dataset.toolOnly = "true";
     if (ignored.has(normalized.encodedContactId) && normalized.encodedContactId === bookedMemberId) {
       chip.dataset.lockedBooker = "true";
       const remove = chip.querySelector("button");
@@ -1024,7 +1126,7 @@ function renderBookings(bookings) {
     head.innerHTML = `
       <div>
         <strong>${formatBookingTitle(booking)}</strong>
-        <span>${booking.activityName || "Padel"} - ${booking.clubName || "Club"} - ${booking.status || "-"}</span>
+        <span class="booking-subtitle">${booking.activityName || "Padel"} - ${booking.clubName || "Club"} ${bookingStatusBadge(booking.status)}</span>
       </div>
       <div class="booking-metrics">
         <span>${bookingDurationLabel(booking)}</span>
@@ -1038,12 +1140,15 @@ function renderBookings(bookings) {
 
     const editor = document.createElement("div");
     editor.className = "booking-editor";
+    const tools = document.createElement("details");
+    tools.className = "booking-tools";
+    tools.innerHTML = "<summary>Spelers toevoegen en uitnodigingen beheren</summary>";
 
     const searchRoot = document.createElement("div");
     searchRoot.className = "booking-player-search";
     renderSearchBox(searchRoot, {
       placeholder: "Search player to add",
-      onAdd: (player) => addPlayerChip(playersRoot, player, { className: "booking-player", maxPlayers: 4 }),
+      onAdd: (player) => addPlayerChip(playersRoot, player, { className: "booking-player", maxEffectivePlayers: 4 }),
     });
 
     const invite = document.createElement("div");
@@ -1113,6 +1218,21 @@ function renderBookings(bookings) {
 
     const actions = document.createElement("div");
     actions.className = "booking-actions";
+    const copyText = document.createElement("button");
+    copyText.type = "button";
+    copyText.textContent = "Kopieer tekst";
+    copyText.addEventListener("click", async () => {
+      try {
+        await copyTextToClipboard(bookingCopyText(booking, bookings));
+        copyText.textContent = "Gekopieerd";
+        setStatus("Boekingtekst gekopieerd.");
+        setTimeout(() => {
+          copyText.textContent = "Kopieer tekst";
+        }, 1400);
+      } catch (error) {
+        setStatus(`Kopieren mislukt: ${error.message || error}`, true);
+      }
+    });
     const save = document.createElement("button");
     save.type = "button";
     save.className = "primary";
@@ -1136,16 +1256,18 @@ function renderBookings(bookings) {
     const raw = document.createElement("details");
     raw.className = "booking-raw";
     raw.innerHTML = `<summary>Raw booking</summary><pre>${JSON.stringify(booking, null, 2)}</pre>`;
+    actions.appendChild(copyText);
     actions.appendChild(save);
     actions.appendChild(takeover);
     actions.appendChild(cancel);
     actions.appendChild(raw);
 
     editor.appendChild(playersRoot);
-    editor.appendChild(searchRoot);
-    editor.appendChild(invite);
-    editor.appendChild(bookingInvites);
     editor.appendChild(actions);
+    tools.appendChild(searchRoot);
+    tools.appendChild(invite);
+    tools.appendChild(bookingInvites);
+    editor.appendChild(tools);
     item.appendChild(head);
     item.appendChild(editor);
     root.appendChild(item);

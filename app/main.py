@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import logging
 import re
 from datetime import datetime, timedelta
@@ -26,6 +27,7 @@ from app.whatsapp import WhatsAppError, whatsapp_manager
 app = FastAPI(title="David Lloyd Login Backend", version="0.1.0")
 logger = logging.getLogger("davidlloyd-backend")
 app.mount("/static", StaticFiles(directory=ROOT / "app" / "static"), name="static")
+BOOKING_TOOL_PLAYERS_PATH = ROOT / "state" / "booking_tool_players.json"
 
 
 def client() -> DavidLloydClient:
@@ -35,6 +37,51 @@ def client() -> DavidLloydClient:
 def padel_service() -> PadelBookingService:
     cfg = load_config()
     return PadelBookingService(DavidLloydClient(cfg), cfg.padel)
+
+
+def read_booking_tool_players() -> dict[str, list[str]]:
+    if not BOOKING_TOOL_PLAYERS_PATH.exists():
+        return {}
+    with BOOKING_TOOL_PLAYERS_PATH.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(ref): [str(player_id) for player_id in player_ids if player_id]
+        for ref, player_ids in data.items()
+        if isinstance(player_ids, list)
+    }
+
+
+def write_booking_tool_players(entries: dict[str, list[str]]) -> None:
+    BOOKING_TOOL_PLAYERS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    cleaned = {ref: player_ids for ref, player_ids in entries.items() if player_ids}
+    with BOOKING_TOOL_PLAYERS_PATH.open("w", encoding="utf-8") as handle:
+        json.dump(cleaned, handle, indent=2, sort_keys=True)
+
+
+def update_booking_tool_players(encoded_booking_reference: str, player_ids: list[str]) -> None:
+    entries = read_booking_tool_players()
+    unique: list[str] = []
+    for player_id in player_ids:
+        if player_id and player_id not in unique:
+            unique.append(player_id)
+    if unique:
+        entries[encoded_booking_reference] = unique
+    else:
+        entries.pop(encoded_booking_reference, None)
+    write_booking_tool_players(entries)
+
+
+def tool_player_name(player_id: str) -> str:
+    cfg = load_config()
+    known_name = cfg.padel.known_players.get(player_id)
+    if known_name:
+        return known_name
+    phonebook_entry = next((player for player in read_phonebook() if player.get("encodedContactId") == player_id), None)
+    if phonebook_entry and phonebook_entry.get("fullName"):
+        return str(phonebook_entry["fullName"])
+    return player_id
 
 
 class BookGeneratedRequest(BaseModel):
@@ -52,6 +99,7 @@ class BookSlotRequest(BaseModel):
 class UpdateBookingPlayersRequest(BaseModel):
     encodedBookingReference: str
     playersEncodedContactIds: list[str] = Field(max_length=4)
+    toolOnlyPlayerIds: list[str] = []
 
 
 class CancelBookingRequest(BaseModel):
@@ -276,6 +324,29 @@ def membership_status() -> dict:
 def normalize_booking(booking: dict[str, Any]) -> dict[str, Any]:
     details = booking.get("details") or {}
     players = details.get("players") or []
+    encoded_booking_reference = booking.get("encodedBookingReference")
+    normalized_players = [
+        {
+            "name": player.get("fullName") or player.get("name"),
+            "encodedContactId": player.get("encodedContactId"),
+            "memberReferenceNumber": player.get("memberReferenceNumber"),
+            "homeClubSiteId": player.get("homeClubSiteId"),
+            "paymentRequiredForCourtBookings": player.get("paymentRequiredForCourtBookings"),
+        }
+        for player in players
+    ]
+    existing_player_ids = {player.get("encodedContactId") for player in normalized_players}
+    for player_id in read_booking_tool_players().get(str(encoded_booking_reference or ""), []):
+        if player_id in existing_player_ids:
+            continue
+        normalized_players.append({
+            "name": tool_player_name(player_id),
+            "encodedContactId": player_id,
+            "memberReferenceNumber": None,
+            "homeClubSiteId": None,
+            "paymentRequiredForCourtBookings": None,
+            "toolOnly": True,
+        })
     return {
         "date": booking.get("date"),
         "startTime": booking.get("startTime"),
@@ -286,18 +357,9 @@ def normalize_booking(booking: dict[str, Any]) -> dict[str, Any]:
         "courtId": details.get("courtId"),
         "bookedMemberEncodedContactId": booking.get("bookedMemberEncodedContactId"),
         "bookedByEncodedContactId": booking.get("bookedByEncodedContactId"),
-        "encodedBookingReference": booking.get("encodedBookingReference"),
+        "encodedBookingReference": encoded_booking_reference,
         "canMemberCancel": booking.get("canMemberCancel"),
-        "players": [
-            {
-                "name": player.get("fullName") or player.get("name"),
-                "encodedContactId": player.get("encodedContactId"),
-                "memberReferenceNumber": player.get("memberReferenceNumber"),
-                "homeClubSiteId": player.get("homeClubSiteId"),
-                "paymentRequiredForCourtBookings": player.get("paymentRequiredForCourtBookings"),
-            }
-            for player in players
-        ],
+        "players": normalized_players,
         "raw": booking,
     }
 
@@ -891,6 +953,8 @@ PUBLIC_PAGE_STYLE = """
   .user-badge { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fbfcfd; color: var(--text); font-weight: 650; }
   .user-icon { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: white; font-size: 14px; }
   .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin: 8px 0 18px; }
+  .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tabs::-webkit-scrollbar { display: none; }
   .tab { border: 0; border-bottom: 3px solid transparent; border-radius: 0; padding: 10px 4px; background: transparent; color: var(--muted); }
   .tab.active { border-color: var(--accent); color: var(--text); font-weight: 700; }
   .meta { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 14px; margin-bottom: 16px; }
@@ -903,10 +967,10 @@ PUBLIC_PAGE_STYLE = """
   .loader-icons span { opacity: .18; transform: scale(.82); transition: opacity .18s ease, transform .18s ease; }
   .loader-icons span.active { opacity: 1; transform: scale(1.16); }
   ul { list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 10px; }
-  li { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 12px; }
+  li { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 12px; overflow-wrap: anywhere; }
   li span { display: block; margin-top: 4px; color: var(--muted); }
   form { display: inline-block; margin-right: 8px; }
-  button { border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }
+  button { border: 1px solid var(--line); border-radius: 7px; min-height: 42px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }
   button.primary, .primary { background: var(--accent); border-color: var(--accent); color: white; }
   button.secondary, .secondary { border-color: var(--line); background: white; color: var(--text); }
   button:disabled { opacity: .55; cursor: not-allowed; }
@@ -920,11 +984,20 @@ PUBLIC_PAGE_STYLE = """
   .modal p { margin: 0 0 16px; }
   .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
   @media (max-width: 560px) {
-    main, main.wide-main { width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; }
-    .page-head { align-items: flex-start; }
+    body { background: var(--surface); }
+    main, main.wide-main { width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; box-shadow: none; padding: 16px 14px 72px; }
+    h1 { font-size: 23px; }
+    .page-head { align-items: flex-start; flex-direction: column; gap: 10px; }
     .brand-icon { width: 38px; height: 38px; font-size: 22px; }
+    .user-badge { max-width: 100%; }
+    .tabs { margin-inline: -14px; padding-inline: 14px; }
+    .tab { flex: 0 0 auto; white-space: nowrap; }
+    .loader { padding: 16px 12px; }
+    .loader-icons { font-size: 26px; }
     li { grid-template-columns: 1fr; }
     form, button { width: 100%; margin: 0 0 8px; }
+    .modal-backdrop { align-items: end; padding: 10px; }
+    .modal { max-height: calc(100vh - 20px); overflow: auto; border-radius: 10px; }
     .modal-actions { display: grid; }
   }
 """
@@ -1100,7 +1173,7 @@ def render_player_signup_page(
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Padel Bot</title>
+        <title>&#129302; Padel Bot</title>
         <style>{PUBLIC_PAGE_STYLE}</style>
       </head>
       <body>
@@ -1408,10 +1481,12 @@ def padel_bookings() -> dict:
 @app.put("/padel/bookings/players")
 def update_booking_players(payload: UpdateBookingPlayersRequest) -> dict:
     try:
-        return update_booking_players_with_ids(
+        result = update_booking_players_with_ids(
             payload.encodedBookingReference,
             payload.playersEncodedContactIds,
         )
+        update_booking_tool_players(payload.encodedBookingReference, payload.toolOnlyPlayerIds)
+        return result
     except FileNotFoundError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DavidLloydError as exc:
