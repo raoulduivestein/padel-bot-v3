@@ -38,6 +38,10 @@
       "SHlQK3EvQVU3VXk4QTFraXN1WWoxdw=="
     ],
     "preferred_courts": [737381, 737383, 737385],
+    "court_aliases": {
+      "737381": "Baan 1",
+      "737383": "Baan 2"
+    },
     "fallback_to_any": true,
     "booking_confirmation_type": "provisional",
     "invite_message_template": "Padel uitnodiging: {date} om {time} bij {club_name}.\n\nBevestig of weiger hier: {invite_url}",

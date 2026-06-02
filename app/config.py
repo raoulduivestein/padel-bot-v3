@@ -47,6 +47,7 @@ class PadelConfig(BaseModel):
     known_players: dict[str, str] = {}
     always_add_player_ids: list[str] = []
     preferred_courts: list[int] = []
+    court_aliases: dict[str, str] = {}
     fallback_to_any: bool = True
     booking_confirmation_type: str = "provisional"
     invite_message_template: str = (
@@ -77,6 +78,7 @@ def default_padel_config() -> PadelConfig:
         ],
         always_add_player_ids=["SHlQK3EvQVU3VXk4QTFraXN1WWoxdw=="],
         preferred_courts=[737381, 737383, 737385],
+        court_aliases={},
         fallback_to_any=True,
         booking_confirmation_type="provisional",
         invite_message_template=(
@@ -124,8 +126,9 @@ class AppConfig(BaseModel):
     @model_validator(mode="after")
     def validate_rule_players(self) -> "AppConfig":
         member_ids = {member.member_id for member in self.padel.members}
+        playing_member_ids = {member.member_id for member in self.padel.members if member.plays}
         always_ids = set(self.padel.always_add_player_ids)
-        reserved = member_ids | always_ids
+        reserved = playing_member_ids | always_ids
 
         duplicate_always = sorted(member_ids.intersection(always_ids))
         if duplicate_always:
@@ -138,7 +141,7 @@ class AppConfig(BaseModel):
             duplicates = [player_id for player_id in rule.player_ids if player_id in reserved]
             if duplicates:
                 raise ValueError(
-                    f"Booking rule {rule.day} has player_ids already configured as members or always_add_player_ids: "
+                    f"Booking rule {rule.day} has player_ids already configured as playing members or always_add_player_ids: "
                     f"{', '.join(duplicates)}"
                 )
 

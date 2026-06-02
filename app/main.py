@@ -416,6 +416,186 @@ def effective_booking_player_ids(booking: dict[str, Any]) -> list[str]:
     ]
 
 
+def unique_ids(values: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value and value not in seen:
+            result.append(value)
+            seen.add(value)
+    return result
+
+
+def matching_booking_rule_indexes(config: AppConfig, booking: dict[str, Any]) -> list[int]:
+    start = booking_start_datetime(booking)
+    if start is None:
+        return []
+    weekday = start.strftime("%A").lower()
+    matches: list[int] = []
+    for index, rule in enumerate(config.padel.booking_rules):
+        if rule.day.lower() != weekday:
+            continue
+        for base_time in rule.times:
+            try:
+                hour, minute = map(int, base_time.split(":"))
+            except ValueError:
+                continue
+            base = start.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            end = base + timedelta(hours=rule.duration)
+            if base <= start < end:
+                matches.append(index)
+                break
+    return matches
+
+
+def configured_playing_ids_for_rule(config: AppConfig, rule_index: int, extra_player_id: str | None = None) -> list[str]:
+    rule = config.padel.booking_rules[rule_index]
+    ids = [
+        *[member.member_id for member in config.padel.members if member.plays],
+        *config.padel.always_add_player_ids,
+        *rule.player_ids,
+    ]
+    if extra_player_id:
+        ids.append(extra_player_id)
+    return unique_ids(ids)
+
+
+def add_player_to_booking_rules(player_id: str, booking: dict[str, Any]) -> dict[str, Any]:
+    config = load_config()
+    reserved_ids = {member.member_id for member in config.padel.members if member.plays} | set(config.padel.always_add_player_ids)
+    rule_indexes = matching_booking_rule_indexes(config, booking)
+    if not rule_indexes:
+        return {"added": False, "reason": "No matching booking rule found", "ruleIndexes": []}
+    if player_id in reserved_ids:
+        return {"added": False, "reason": "Player is already configured as member or always-add player", "ruleIndexes": rule_indexes}
+
+    added_indexes: list[int] = []
+    full_indexes: list[int] = []
+    for rule_index in rule_indexes:
+        rule = config.padel.booking_rules[rule_index]
+        if player_id in rule.player_ids:
+            continue
+        if len(configured_playing_ids_for_rule(config, rule_index, player_id)) > 4:
+            full_indexes.append(rule_index)
+            continue
+        rule.player_ids.append(player_id)
+        added_indexes.append(rule_index)
+
+    if added_indexes:
+        write_config(config)
+    return {
+        "added": bool(added_indexes),
+        "ruleIndexes": rule_indexes,
+        "addedRuleIndexes": added_indexes,
+        "fullRuleIndexes": full_indexes,
+    }
+
+
+def booking_rule_add_blockers(player_id: str, bookings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    config = load_config()
+    reserved_ids = {member.member_id for member in config.padel.members if member.plays} | set(config.padel.always_add_player_ids)
+    if player_id in reserved_ids:
+        return []
+
+    blockers: list[dict[str, Any]] = []
+    checked: set[int] = set()
+    for booking in bookings:
+        for rule_index in matching_booking_rule_indexes(config, booking):
+            if rule_index in checked:
+                continue
+            checked.add(rule_index)
+            rule = config.padel.booking_rules[rule_index]
+            if player_id in rule.player_ids:
+                continue
+            player_count = len(configured_playing_ids_for_rule(config, rule_index, player_id))
+            if player_count > 4:
+                blockers.append({
+                    "ruleIndex": rule_index,
+                    "day": rule.day,
+                    "times": rule.times,
+                    "playerCount": player_count,
+                })
+    return blockers
+
+
+def player_signup_rules_payload(invite: dict[str, Any]) -> dict[str, Any]:
+    player_id = (invite.get("player") or {}).get("encodedContactId")
+    if not player_id:
+        raise HTTPException(status_code=400, detail="Signup player has no encodedContactId")
+    config = load_config()
+    reserved_ids = {member.member_id for member in config.padel.members if member.plays} | set(config.padel.always_add_player_ids)
+    can_manage = player_id not in reserved_ids
+    rules = []
+    for index, rule in enumerate(config.padel.booking_rules):
+        playing_ids = configured_playing_ids_for_rule(config, index)
+        player_count_with_player = len(configured_playing_ids_for_rule(config, index, player_id))
+        is_added = player_id in rule.player_ids or player_id in reserved_ids
+        rules.append({
+            "index": index,
+            "day": rule.day,
+            "times": rule.times,
+            "duration": rule.duration,
+            "isAdded": is_added,
+            "canAdd": can_manage and not is_added and player_count_with_player <= 4,
+            "canRemove": can_manage and player_id in rule.player_ids,
+            "playerCount": len(playing_ids),
+            "playerCountWithPlayer": player_count_with_player,
+        })
+    return {
+        "player": invite.get("player") or {},
+        "canManage": can_manage,
+        "message": "" if can_manage else "Je staat al standaard als spelende member of Always add player.",
+        "rules": rules,
+    }
+
+
+def update_player_booking_rule(token: str, rule_index: int, action: str) -> dict[str, Any]:
+    invite = get_invite(token)
+    if invite is None or invite.get("kind") != "player_signup":
+        raise HTTPException(status_code=404, detail="Signup link not found")
+    if invite.get("status") != ACTIVE_PLAYER_SIGNUP_STATUS:
+        raise HTTPException(status_code=409, detail="Signup link is not active")
+    player_id = (invite.get("player") or {}).get("encodedContactId")
+    if not player_id:
+        raise HTTPException(status_code=400, detail="Signup player has no encodedContactId")
+
+    config = load_config()
+    if rule_index < 0 or rule_index >= len(config.padel.booking_rules):
+        raise HTTPException(status_code=404, detail="Booking rule not found")
+    reserved_ids = {member.member_id for member in config.padel.members if member.plays} | set(config.padel.always_add_player_ids)
+    if player_id in reserved_ids:
+        raise HTTPException(status_code=400, detail="Player is already configured as playing member or always-add player")
+
+    rule = config.padel.booking_rules[rule_index]
+    if action == "add":
+        if player_id not in rule.player_ids:
+            if len(configured_playing_ids_for_rule(config, rule_index, player_id)) > 4:
+                raise HTTPException(status_code=409, detail="Booking rule already has 4 playing players")
+            rule.player_ids.append(player_id)
+            write_config(config)
+    elif action == "remove":
+        if player_id in rule.player_ids:
+            rule.player_ids = [current_id for current_id in rule.player_ids if current_id != player_id]
+            write_config(config)
+    else:
+        raise HTTPException(status_code=400, detail="Unknown booking rule action")
+
+    return player_signup_rules_payload(invite)
+
+
+def remove_player_from_booking_rules(player_id: str, booking: dict[str, Any]) -> dict[str, Any]:
+    config = load_config()
+    removed_indexes: list[int] = []
+    for rule_index in matching_booking_rule_indexes(config, booking):
+        rule = config.padel.booking_rules[rule_index]
+        if player_id in rule.player_ids:
+            rule.player_ids = [current_id for current_id in rule.player_ids if current_id != player_id]
+            removed_indexes.append(rule_index)
+    if removed_indexes:
+        write_config(config)
+    return {"removed": bool(removed_indexes), "removedRuleIndexes": removed_indexes}
+
+
 def update_ids_for_signup(booking: dict[str, Any], player_id: str) -> tuple[list[str], bool]:
     non_playing_ids = configured_non_playing_member_ids()
     booked_member_id = booking.get("bookedMemberEncodedContactId")
@@ -439,6 +619,7 @@ def player_signup_open_groups(player_id: str) -> list[dict[str, Any]]:
 
 
 def player_signup_open_groups_from_bookings(player_id: str, bookings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    config = load_config()
     candidates = [
         booking
         for booking in bookings
@@ -497,6 +678,7 @@ def player_signup_open_groups_from_bookings(player_id: str, bookings: list[dict[
             ).strftime("%H:%M") if booking_start_datetime(group[-1]) else format_time_nl(group[-1].get("startTime")),
             "clubName": group[0].get("clubName"),
             "courtId": group[0].get("courtId"),
+            "courtLabel": court_label(config, group[0].get("courtId")),
             "bookings": group,
             "playerCounts": [len(effective_booking_player_ids(item)) for item in group],
         })
@@ -504,6 +686,7 @@ def player_signup_open_groups_from_bookings(player_id: str, bookings: list[dict[
 
 
 def player_signup_existing_groups(invite: dict[str, Any], player_id: str, bookings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    config = load_config()
     by_ref = {
         booking.get("encodedBookingReference"): booking
         for booking in bookings
@@ -543,6 +726,7 @@ def player_signup_existing_groups(invite: dict[str, Any], player_id: str, bookin
             ).strftime("%H:%M") if booking_start_datetime(last_booking) else format_time_nl(last_booking.get("startTime")),
             "clubName": first_booking.get("clubName"),
             "courtId": first_booking.get("courtId"),
+            "courtLabel": court_label(config, first_booking.get("courtId")),
             "bookings": signup_bookings,
             "bookingReferences": [booking.get("encodedBookingReference") for booking in signup_bookings],
             "joinedAt": signup.get("joinedAt"),
@@ -610,6 +794,7 @@ def player_signup_existing_groups(invite: dict[str, Any], player_id: str, bookin
             ).strftime("%H:%M") if booking_start_datetime(last_booking) else format_time_nl(last_booking.get("startTime")),
             "clubName": first_booking.get("clubName"),
             "courtId": first_booking.get("courtId"),
+            "courtLabel": court_label(config, first_booking.get("courtId")),
             "bookings": group,
             "bookingReferences": [item.get("encodedBookingReference") for item in group],
             "joinedAt": None,
@@ -683,6 +868,68 @@ def first_name(value: Any) -> str:
     return name.split()[0] if name else "-"
 
 
+def court_label(config: AppConfig, court_id: Any) -> str:
+    if court_id in (None, ""):
+        return "-"
+    court_key = str(court_id)
+    return config.padel.court_aliases.get(court_key) or f"Court {court_key}"
+
+
+PUBLIC_PAGE_STYLE = """
+  :root { --bg:#f6f7f8; --surface:#fff; --line:#d8dde3; --text:#171a1f; --muted:#66707f; --accent:#0f766e; --danger:#b42318; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { width: min(620px, calc(100% - 32px)); margin: 36px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }
+  main.wide-main { width: min(760px, calc(100% - 32px)); }
+  h1 { margin: 0 0 14px; font-size: 26px; line-height: 1.15; }
+  h2 { margin: 22px 0 8px; font-size: 18px; }
+  p { color: var(--muted); line-height: 1.5; }
+  .notice { color: var(--text); }
+  .page-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 14px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; margin: 0; }
+  .brand-icon { display: inline-grid; place-items: center; width: 42px; height: 42px; border: 1px solid #c6ece6; border-radius: 8px; background: #e9fbf7; font-size: 24px; }
+  .user-badge { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fbfcfd; color: var(--text); font-weight: 650; }
+  .user-icon { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent); color: white; font-size: 14px; }
+  .tabs { display: flex; gap: 8px; border-bottom: 1px solid var(--line); margin: 8px 0 18px; }
+  .tab { border: 0; border-bottom: 3px solid transparent; border-radius: 0; padding: 10px 4px; background: transparent; color: var(--muted); }
+  .tab.active { border-color: var(--accent); color: var(--text); font-weight: 700; }
+  .meta { display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 14px; margin-bottom: 16px; }
+  .meta span { display: block; color: var(--muted); font-size: 13px; }
+  .meta strong { display: block; margin-top: 3px; color: var(--text); }
+  .warning { border: 1px solid #f1c7c2; border-radius: 7px; background: #fff7f6; color: var(--text); padding: 12px; margin: 14px 0; }
+  .loader { display: grid; justify-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 20px; margin: 16px 0; transition: opacity .18s ease, transform .18s ease; }
+  .loader.is-done { opacity: 0; transform: translateY(-4px); }
+  .loader-icons { display: flex; min-height: 38px; align-items: center; gap: 12px; font-size: 30px; }
+  .loader-icons span { opacity: .18; transform: scale(.82); transition: opacity .18s ease, transform .18s ease; }
+  .loader-icons span.active { opacity: 1; transform: scale(1.16); }
+  ul { list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 10px; }
+  li { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 12px; }
+  li span { display: block; margin-top: 4px; color: var(--muted); }
+  form { display: inline-block; margin-right: 8px; }
+  button { border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }
+  button.primary, .primary { background: var(--accent); border-color: var(--accent); color: white; }
+  button.secondary, .secondary { border-color: var(--line); background: white; color: var(--text); }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  .danger { background: var(--danger); border-color: var(--danger); color: white; }
+  .wide { width: 100%; margin-top: 16px; }
+  .status { display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fff; color: var(--text); }
+  .modal-backdrop { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 18px; background: rgba(15,23,42,.45); }
+  .modal-backdrop[hidden] { display: none; }
+  .modal { width: min(430px, 100%); border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 18px 45px rgba(15,23,42,.2); padding: 18px; }
+  .modal h2 { margin: 0 0 8px; }
+  .modal p { margin: 0 0 16px; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+  @media (max-width: 560px) {
+    main, main.wide-main { width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; }
+    .page-head { align-items: flex-start; }
+    .brand-icon { width: 38px; height: 38px; font-size: 22px; }
+    li { grid-template-columns: 1fr; }
+    form, button { width: 100%; margin: 0 0 8px; }
+    .modal-actions { display: grid; }
+  }
+"""
+
+
 def render_invite_page(invite: dict[str, Any], *, message: str | None = None, status_code: int = 200) -> HTMLResponse:
     booking = invite.get("booking") or {}
     player = invite.get("player") or {}
@@ -704,31 +951,16 @@ def render_invite_page(invite: dict[str, Any], *, message: str | None = None, st
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Padel uitnodiging</title>
-        <style>
-          :root {{ --bg:#f6f7f8; --surface:#fff; --line:#d8dde3; --text:#171a1f; --muted:#66707f; --accent:#0f766e; }}
-          * {{ box-sizing: border-box; }}
-          body {{ margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-          main {{ width: min(560px, calc(100% - 32px)); margin: 48px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }}
-          h1 {{ margin: 0 0 16px; font-size: 26px; line-height: 1.15; }}
-          .meta {{ display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 14px; margin-bottom: 16px; }}
-          .meta span {{ display: block; color: var(--muted); font-size: 13px; }}
-          .meta strong {{ display: block; margin-top: 3px; color: var(--text); }}
-          p {{ color: var(--muted); line-height: 1.5; }}
-          .notice {{ color: var(--text); }}
-          form {{ display: inline-block; margin-right: 8px; }}
-          button {{ border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }}
-          .primary {{ background: var(--accent); border-color: var(--accent); color: white; }}
-          .status {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fff; color: var(--text); }}
-        </style>
+        <style>{PUBLIC_PAGE_STYLE}</style>
       </head>
       <body>
         <main>
-          <h1>🎾 Padel uitnodiging</h1>
+          <h1>&#127934; Padel uitnodiging</h1>
           <div class="meta">
-            <div><span>👤 Speler</span><strong>{escape(first_name(player.get("fullName")))}</strong></div>
-            <div><span>📅 Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
-            <div><span>📍 Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))}</strong></div>
-            <div><span>✅ Status</span><strong class="status">{escape(status)}</strong></div>
+            <div><span>Speler</span><strong>{escape(first_name(player.get("fullName")))}</strong></div>
+            <div><span>Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
+            <div><span>Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))}</strong></div>
+            <div><span>Status</span><strong class="status">{escape(status)}</strong></div>
           </div>
           {notice}
           {action_html}
@@ -757,7 +989,7 @@ def render_takeover_page(invite: dict[str, Any], *, message: str | None = None, 
     action_html = (
         f"""
         <form method="post" action="/takeover/{invite["token"]}/cancel">
-          <button class="danger" type="submit">Baan annuleren</button>
+          <button class="danger wide" type="submit">Baan annuleren</button>
         </form>
         """
         if can_cancel
@@ -771,40 +1003,21 @@ def render_takeover_page(invite: dict[str, Any], *, message: str | None = None, 
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Baan overnemen</title>
-        <style>
-          :root {{ --bg:#f6f7f8; --surface:#fff; --line:#d8dde3; --text:#171a1f; --muted:#66707f; --accent:#0f766e; --danger:#b42318; }}
-          * {{ box-sizing: border-box; }}
-          body {{ margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-          main {{ width: min(620px, calc(100% - 32px)); margin: 32px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }}
-          h1 {{ margin: 0 0 12px; font-size: 26px; line-height: 1.15; }}
-          h2 {{ margin: 18px 0 10px; font-size: 16px; }}
-          p {{ color: var(--muted); line-height: 1.5; }}
-          .warning {{ border: 1px solid #f1c7c2; border-radius: 7px; background: #fff7f6; color: var(--text); padding: 12px; margin: 14px 0; }}
-          .notice {{ color: var(--text); }}
-          .meta {{ display: grid; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 14px; margin-bottom: 14px; }}
-          .meta span {{ display: block; color: var(--muted); font-size: 13px; }}
-          .meta strong {{ display: block; margin-top: 3px; color: var(--text); }}
-          ul {{ list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }}
-          li {{ display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 10px; }}
-          button {{ border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }}
-          .danger {{ background: var(--danger); border-color: var(--danger); color: white; margin-top: 16px; width: 100%; }}
-          .status {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fff; color: var(--text); }}
-          @media (max-width: 520px) {{ main {{ width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; }} li {{ grid-template-columns: 1fr; }} }}
-        </style>
+        <style>{PUBLIC_PAGE_STYLE}</style>
       </head>
       <body>
         <main>
-          <h1>🎾 Baan overnemen</h1>
+          <h1>&#127934; Baan overnemen</h1>
           <p>Deze baan kan door jou worden overgenomen. Annuleer de baan alleen als je direct daarna zelf in de David Lloyd app opnieuw gaat boeken.</p>
           <div class="warning"><strong>Let op:</strong> zodra je annuleert komt de baan vrij. Boek direct opnieuw met de spelers hieronder, anders kan iemand anders de baan reserveren.</div>
           <div class="meta">
-            <div><span>👤 Ontvanger</span><strong>{escape(first_name(recipient.get("fullName")))}</strong></div>
-            <div><span>📅 Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
-            <div><span>📍 Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))} - Court {escape(str(booking.get("courtId") or "-"))}</strong></div>
-            <div><span>✅ Status</span><strong class="status">{escape(status)}</strong></div>
+            <div><span>Ontvanger</span><strong>{escape(first_name(recipient.get("fullName")))}</strong></div>
+            <div><span>Datum en tijd</span><strong>{escape(format_date_nl(booking.get("date")))} om {escape(format_time_nl(booking.get("startTime")))}</strong></div>
+            <div><span>Locatie</span><strong>{escape(str(booking.get("clubName") or "David Lloyd"))} - Court {escape(str(booking.get("courtId") or "-"))}</strong></div>
+            <div><span>Status</span><strong class="status">{escape(status)}</strong></div>
           </div>
           {notice}
-          <h2>👥 Spelers om opnieuw toe te voegen</h2>
+          <h2>Spelers om opnieuw toe te voegen</h2>
           <ul>{participant_rows or "<li><span>Geen spelers opgegeven.</span></li>"}</ul>
           {action_html}
         </main>
@@ -853,27 +1066,11 @@ def render_signup_page(invite: dict[str, Any], *, message: str | None = None, st
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Inschrijven voor padel</title>
-        <style>
-          :root {{ --bg:#f6f7f8; --surface:#fff; --line:#d8dde3; --text:#171a1f; --muted:#66707f; --accent:#0f766e; }}
-          * {{ box-sizing: border-box; }}
-          body {{ margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-          main {{ width: min(560px, calc(100% - 32px)); margin: 48px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }}
-          h1 {{ margin: 0 0 14px; font-size: 26px; line-height: 1.15; }}
-          p {{ color: var(--muted); line-height: 1.5; }}
-          .notice {{ color: var(--text); }}
-          ul {{ list-style: none; padding: 0; margin: 16px 0; display: grid; gap: 8px; }}
-          li {{ display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 12px; }}
-          li span {{ color: var(--muted); }}
-          form {{ display: inline-block; margin-right: 8px; }}
-          button {{ border: 1px solid var(--line); border-radius: 7px; padding: 10px 14px; background: white; color: var(--text); cursor: pointer; font: inherit; }}
-          .primary {{ background: var(--accent); border-color: var(--accent); color: white; }}
-          .status {{ display: inline-block; border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; background: #fff; color: var(--text); }}
-          @media (max-width: 520px) {{ main {{ width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; }} form, button {{ width: 100%; margin: 0 0 8px; }} }}
-        </style>
+        <style>{PUBLIC_PAGE_STYLE}</style>
       </head>
       <body>
         <main>
-          <h1>🎾 Inschrijven voor padel</h1>
+          <h1>&#127934; Inschrijven voor padel</h1>
           <p>Je schrijft je in als <strong>{escape(first_name(player.get("fullName")))}</strong>. Als deze boeking uit meerdere aansluitende uren bestaat, word je voor alle onderstaande uren toegevoegd.</p>
           <p>Status: <span class="status">{escape(status)}</span></p>
           <ul>{booking_rows}</ul>
@@ -894,6 +1091,8 @@ def render_player_signup_page(
     status_code: int = 200,
 ) -> HTMLResponse:
     player = invite.get("player") or {}
+    display_name = first_name(player.get("fullName"))
+    initial = escape(display_name[:1].upper() or "?")
     notice = f"<p class='notice'>{escape(message)}</p>" if message else ""
     body = f"""
     <!doctype html>
@@ -901,55 +1100,36 @@ def render_player_signup_page(
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
-        <title>Padel inschrijven</title>
-        <style>
-          :root {{ --bg:#f6f7f8; --surface:#fff; --line:#d8dde3; --text:#171a1f; --muted:#66707f; --accent:#0f766e; }}
-          * {{ box-sizing: border-box; }}
-          body {{ margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
-          main {{ width: min(680px, calc(100% - 32px)); margin: 40px auto; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 12px 30px rgba(15,23,42,.08); padding: 22px; }}
-          h1 {{ margin: 0 0 12px; font-size: 26px; line-height: 1.15; }}
-          h2 {{ margin: 22px 0 8px; font-size: 18px; }}
-          p {{ color: var(--muted); line-height: 1.5; }}
-          .notice {{ color: var(--text); }}
-          .loader {{ display: grid; justify-items: center; gap: 10px; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 20px; margin: 16px 0; transition: opacity .18s ease, transform .18s ease; }}
-          .loader.is-done {{ opacity: 0; transform: translateY(-4px); }}
-          .loader-icons {{ display: flex; min-height: 38px; align-items: center; gap: 12px; font-size: 30px; }}
-          .loader-icons span {{ opacity: .18; transform: scale(.82); transition: opacity .18s ease, transform .18s ease; }}
-          .loader-icons span.active {{ opacity: 1; transform: scale(1.16); }}
-          ul {{ list-style: none; padding: 0; margin: 16px 0 0; display: grid; gap: 10px; }}
-          li {{ display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; border: 1px solid var(--line); border-radius: 7px; background: #fbfcfd; padding: 12px; }}
-          li span {{ display: block; margin-top: 4px; color: var(--muted); }}
-          button {{ border: 1px solid var(--accent); border-radius: 7px; padding: 10px 14px; background: var(--accent); color: white; cursor: pointer; font: inherit; }}
-          button.secondary {{ border-color: var(--line); background: white; color: var(--text); }}
-          .modal-backdrop {{ position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 18px; background: rgba(15,23,42,.45); }}
-          .modal-backdrop[hidden] {{ display: none; }}
-          .modal {{ width: min(430px, 100%); border: 1px solid var(--line); border-radius: 8px; background: var(--surface); box-shadow: 0 18px 45px rgba(15,23,42,.2); padding: 18px; }}
-          .modal h2 {{ margin: 0 0 8px; }}
-          .modal p {{ margin: 0 0 16px; }}
-          .modal-actions {{ display: flex; gap: 10px; justify-content: flex-end; }}
-          .danger {{ border-color: #b42318; background: #b42318; color: white; }}
-          @media (max-width: 560px) {{ main {{ width: 100%; min-height: 100vh; margin: 0; border: 0; border-radius: 0; }} li {{ grid-template-columns: 1fr; }} button {{ width: 100%; }} }}
-        </style>
+        <title>Padel Bot</title>
+        <style>{PUBLIC_PAGE_STYLE}</style>
       </head>
       <body>
-        <main>
-          <h1>🎾 Inschrijven voor padel</h1>
-          <p>Hoi <strong>{escape(first_name(player.get("fullName")))}</strong>, kies hieronder een geboekte wedstrijd met vrije plekken. Als de wedstrijd uit twee aansluitende uren bestaat, schrijf je je direct voor beide uren in.</p>
-          {notice}
-          <div id="loader" class="loader">
-            <div id="loaderIcons" class="loader-icons" aria-hidden="true">
-              <span>&#127934;</span><span>&#127939;</span><span>&#127934;</span>
+        <main class="wide-main">
+          <div class="page-head">
+            <h1 class="brand"><span class="brand-icon" aria-hidden="true">&#129302;</span><span>Padel Bot</span></h1>
+            <div class="user-badge" title="Ingelogd als {escape(display_name)}">
+              <span class="user-icon">{initial}</span>
+              <span>{escape(display_name)}</span>
             </div>
-            <strong>Wedstrijden laden...</strong>
-            <span>Even wachten, de padelbanen worden opgehaald.</span>
           </div>
-          <section>
-            <h2>Jouw inschrijvingen</h2>
-            <ul id="signedUpList"></ul>
+          {notice}
+          <nav class="tabs" aria-label="Pagina onderdelen">
+            <button class="tab active" type="button" data-tab="matches">&#127934; Reserveringen</button>
+            <button class="tab" type="button" data-tab="rules">&#128197; Wekelijks</button>
+          </nav>
+          <section id="matchesPage" class="tab-page">
+            <div id="loader" class="loader">
+              <div id="loaderIcons" class="loader-icons" aria-hidden="true"><span>&#127934;</span><span>&#127939;</span><span>&#127934;</span></div>
+              <strong>Wedstrijden laden...</strong>
+              <span>Even wachten, de padelbanen worden opgehaald.</span>
+            </div>
+            <section><h2>Jouw inschrijvingen</h2><ul id="signedUpList"></ul></section>
+            <section><h2>Open wedstrijden</h2><ul id="openList"></ul></section>
           </section>
-          <section>
-            <h2>Open wedstrijden</h2>
-            <ul id="openList"></ul>
+          <section id="rulesPage" class="tab-page" hidden>
+            <h2>Vaste speelmomenten</h2>
+            <p>Beheer je vaste speelmomenten. Er mogen maximaal 4 spelende spelers in een rule staan.</p>
+            <ul id="rulesList"></ul>
           </section>
         </main>
         <div id="confirmModal" class="modal-backdrop" hidden>
@@ -968,12 +1148,16 @@ def render_player_signup_page(
           const loaderIcons = [...document.querySelectorAll("#loaderIcons span")];
           const openList = document.getElementById("openList");
           const signedUpList = document.getElementById("signedUpList");
+          const rulesList = document.getElementById("rulesList");
+          const tabs = [...document.querySelectorAll(".tab")];
+          const pages = {{ matches: document.getElementById("matchesPage"), rules: document.getElementById("rulesPage") }};
           const confirmModal = document.getElementById("confirmModal");
           const confirmTitle = document.getElementById("confirmTitle");
           const confirmText = document.getElementById("confirmText");
           const confirmCancel = document.getElementById("confirmCancel");
           const confirmSubmit = document.getElementById("confirmSubmit");
           let pendingForm = null;
+          let pendingRuleAction = null;
           let loaderIndex = 0;
           const loaderTimer = window.setInterval(() => {{
             loaderIcons.forEach((icon, index) => icon.classList.toggle("active", index === loaderIndex));
@@ -981,15 +1165,11 @@ def render_player_signup_page(
           }}, 260);
 
           function escapeHtml(value) {{
-            return String(value ?? "").replace(/[&<>"']/g, (char) => ({{
-              "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
-            }}[char]));
+            return String(value ?? "").replace(/[&<>"']/g, (char) => ({{ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }}[char]));
           }}
-
-          function groupTitle(group) {{
-            const weekday = group.weekday ? group.weekday.charAt(0).toUpperCase() + group.weekday.slice(1) : "-";
-            return `${{weekday}} ${{group.dateNl || group.date || "-"}} om ${{group.startTime || "-"}} - ${{group.endTime || "-"}}`;
-          }}
+          function titleCase(value) {{ return value ? value.charAt(0).toUpperCase() + value.slice(1) : "-"; }}
+          function groupTitle(group) {{ return `${{titleCase(group.weekday)}} ${{group.dateNl || group.date || "-"}} om ${{group.startTime || "-"}} - ${{group.endTime || "-"}}`; }}
+          function ruleTitle(rule) {{ return `${{titleCase(rule.day)}} ${{(rule.times || []).join(", ")}}`; }}
 
           function renderOpen(groups) {{
             if (!groups.length) {{
@@ -1000,16 +1180,14 @@ def render_player_signup_page(
               <li>
                 <div>
                   <strong>${{escapeHtml(groupTitle(group))}}</strong>
-                  <span>${{escapeHtml(group.clubName || "David Lloyd")}} - Court ${{escapeHtml(group.courtId || "-")}} - ${{(group.bookings || []).length}} uur/blok</span>
+                  <span>${{escapeHtml(group.clubName || "David Lloyd")}} - ${{escapeHtml(group.courtLabel || `Court ${{group.courtId || "-"}}`)}} - ${{(group.bookings || []).length}} uur/blok</span>
                   <span>Bezetting: ${{escapeHtml((group.playerCounts || []).map((count) => `${{count}}/4`).join(", "))}}</span>
                 </div>
                 <form method="post" action="/signup/player/${{encodeURIComponent(token)}}/join/${{encodeURIComponent(group.id || "")}}" data-confirm-kind="join" data-confirm-title="${{escapeHtml(groupTitle(group))}}">
-                  <button class="primary" type="submit">Inschrijven</button>
+                  <button class="primary" type="submit">&#9989; Inschrijven</button>
                 </form>
-              </li>
-            `).join("");
+              </li>`).join("");
           }}
-
           function renderSignedUp(groups) {{
             if (!groups.length) {{
               signedUpList.innerHTML = "<li><div><strong>Nog geen inschrijvingen</strong><span>Je staat nog niet op een aankomende wedstrijd via deze link.</span></div></li>";
@@ -1019,85 +1197,117 @@ def render_player_signup_page(
               <li>
                 <div>
                   <strong>${{escapeHtml(groupTitle(group))}}</strong>
-                  <span>${{escapeHtml(group.clubName || "David Lloyd")}} - Court ${{escapeHtml(group.courtId || "-")}}</span>
+                  <span>${{escapeHtml(group.clubName || "David Lloyd")}} - ${{escapeHtml(group.courtLabel || `Court ${{group.courtId || "-"}}`)}}</span>
                   <span>${{group.canCancel ? "Je kunt nog annuleren tot 72 uur vooraf." : "Annuleren kan niet meer binnen 72 uur voor start."}}</span>
                 </div>
-                ${{group.canCancel ? `
-                  <form method="post" action="/signup/player/${{encodeURIComponent(token)}}/cancel/${{encodeURIComponent(group.id || "")}}" data-confirm-kind="cancel" data-confirm-title="${{escapeHtml(groupTitle(group))}}">
-                    <button class="secondary" type="submit">Annuleren</button>
-                  </form>
-                ` : ""}}
-              </li>
-            `).join("");
+                ${{group.canCancel ? `<form method="post" action="/signup/player/${{encodeURIComponent(token)}}/cancel/${{encodeURIComponent(group.id || "")}}" data-confirm-kind="cancel" data-confirm-title="${{escapeHtml(groupTitle(group))}}"><button class="secondary" type="submit">&#10060; Annuleren</button></form>` : ""}}
+              </li>`).join("");
           }}
-
-          function stopLoader() {{
-            window.clearInterval(loaderTimer);
-            loader.classList.add("is-done");
-            window.setTimeout(() => {{
-              loader.hidden = true;
-              loader.remove();
-            }}, 180);
+          function renderRules(payload) {{
+            const rules = payload.rules || [];
+            if (!rules.length) {{
+              rulesList.innerHTML = "<li><div><strong>Geen booking rules</strong><span>Er zijn geen vaste speelmomenten ingesteld.</span></div></li>";
+              return;
+            }}
+            const message = payload.message ? `<li><div><strong>Niet aanpasbaar</strong><span>${{escapeHtml(payload.message)}}</span></div></li>` : "";
+            rulesList.innerHTML = message + rules.map((rule) => {{
+              const countText = `${{rule.playerCount}}/4 spelende spelers`;
+              const action = rule.canRemove
+                ? `<button class="secondary" type="button" data-rule-action="remove" data-rule-index="${{rule.index}}" data-rule-title="${{escapeHtml(ruleTitle(rule))}}">&#128465; Verwijderen</button>`
+                : rule.canAdd
+                  ? `<button class="primary" type="button" data-rule-action="add" data-rule-index="${{rule.index}}" data-rule-title="${{escapeHtml(ruleTitle(rule))}}">&#10133; Toevoegen</button>`
+                  : `<button class="secondary" type="button" disabled>${{rule.isAdded ? "&#9989; Toegevoegd" : "&#128274; Vol"}}</button>`;
+              return `<li><div><strong>${{escapeHtml(ruleTitle(rule))}}</strong><span>Duur: ${{escapeHtml(rule.duration || "-")}} uur - ${{escapeHtml(countText)}}</span></div>${{action}}</li>`;
+            }}).join("");
           }}
-
+          async function loadRules() {{
+            rulesList.innerHTML = "<li><div><strong>Booking rules laden...</strong><span>Een moment.</span></div></li>";
+            try {{
+              const response = await fetch(`/signup/player/${{encodeURIComponent(token)}}/rules`, {{ headers: {{ "Accept": "application/json" }} }});
+              if (!response.ok) throw new Error(await response.text());
+              renderRules(await response.json());
+            }} catch (error) {{
+              rulesList.innerHTML = `<li><div><strong>Laden mislukt</strong><span>${{escapeHtml(error.message || error)}}</span></div></li>`;
+            }}
+          }}
+          async function updateRule(index, action) {{
+            rulesList.innerHTML = "<li><div><strong>Booking rule bijwerken...</strong><span>Een moment.</span></div></li>";
+            try {{
+              const response = await fetch(`/signup/player/${{encodeURIComponent(token)}}/rules/${{encodeURIComponent(index)}}/${{action}}`, {{ method: "POST", headers: {{ "Accept": "application/json" }} }});
+              if (!response.ok) throw new Error(await response.text());
+              renderRules(await response.json());
+            }} catch (error) {{
+              rulesList.innerHTML = `<li><div><strong>Bijwerken mislukt</strong><span>${{escapeHtml(error.message || error)}}</span></div></li>`;
+            }}
+          }}
+          function stopLoader() {{ window.clearInterval(loaderTimer); loader.classList.add("is-done"); window.setTimeout(() => {{ loader.hidden = true; loader.remove(); }}, 180); }}
           function openConfirm(form) {{
             pendingForm = form;
-            const kind = form.dataset.confirmKind;
+            const isCancel = form.dataset.confirmKind === "cancel";
             const title = form.dataset.confirmTitle || "deze wedstrijd";
-            const isCancel = kind === "cancel";
             confirmTitle.textContent = isCancel ? "Inschrijving annuleren?" : "Inschrijving bevestigen?";
-            confirmText.textContent = isCancel
-              ? `Weet je zeker dat je jouw inschrijving voor ${{title}} wilt annuleren?`
-              : `Wil je je inschrijven voor ${{title}}?`;
-            confirmSubmit.textContent = isCancel ? "Annuleren" : "Inschrijven";
+            confirmText.textContent = isCancel ? `Weet je zeker dat je jouw inschrijving voor ${{title}} wilt annuleren?` : `Wil je je inschrijven voor ${{title}}?`;
+            confirmSubmit.textContent = isCancel ? "❌ Annuleren" : "✅ Inschrijven";
             confirmSubmit.className = isCancel ? "danger" : "primary";
             confirmModal.hidden = false;
           }}
-
-          function closeConfirm() {{
+          function openRuleConfirm(index, action, title) {{
             pendingForm = null;
-            confirmModal.hidden = true;
+            pendingRuleAction = {{ index, action }};
+            const isRemove = action === "remove";
+            confirmTitle.textContent = isRemove ? "Vast speelmoment verwijderen?" : "Vast speelmoment toevoegen?";
+            confirmText.textContent = isRemove
+              ? `Wil je jezelf verwijderen uit ${{title}}?`
+              : `Wil je jezelf toevoegen aan ${{title}}?`;
+            confirmSubmit.textContent = isRemove ? "🗑️ Verwijderen" : "➕ Toevoegen";
+            confirmSubmit.className = isRemove ? "danger" : "primary";
+            confirmModal.hidden = false;
           }}
-
+          function closeConfirm() {{ pendingForm = null; pendingRuleAction = null; confirmModal.hidden = true; }}
           document.addEventListener("submit", (event) => {{
             const form = event.target.closest("form[data-confirm-kind]");
             if (!form || form.dataset.confirmed === "true") return;
-            event.preventDefault();
-            openConfirm(form);
+            event.preventDefault(); openConfirm(form);
           }});
           confirmCancel.addEventListener("click", closeConfirm);
-          confirmModal.addEventListener("click", (event) => {{
-            if (event.target === confirmModal) closeConfirm();
-          }});
+          confirmModal.addEventListener("click", (event) => {{ if (event.target === confirmModal) closeConfirm(); }});
           confirmSubmit.addEventListener("click", () => {{
+            if (pendingRuleAction) {{
+              const current = pendingRuleAction;
+              closeConfirm();
+              updateRule(current.index, current.action);
+              return;
+            }}
             if (!pendingForm) return;
             pendingForm.dataset.confirmed = "true";
             pendingForm.submit();
           }});
-
+          tabs.forEach((tab) => {{
+            tab.addEventListener("click", () => {{
+              const name = tab.dataset.tab;
+              tabs.forEach((item) => item.classList.toggle("active", item === tab));
+              Object.entries(pages).forEach(([key, page]) => page.hidden = key !== name);
+              if (name === "rules" && !rulesList.dataset.loaded) {{ rulesList.dataset.loaded = "true"; loadRules(); }}
+            }});
+          }});
+          rulesList.addEventListener("click", (event) => {{
+            const button = event.target.closest("[data-rule-action]");
+            if (button) openRuleConfirm(button.dataset.ruleIndex, button.dataset.ruleAction, button.dataset.ruleTitle || "dit vaste speelmoment");
+          }});
           async function loadData() {{
-            const controller = new AbortController();
-            const timeout = window.setTimeout(() => controller.abort(), 30000);
+            openList.innerHTML = "";
+            signedUpList.innerHTML = "";
             try {{
-              const response = await fetch(`/signup/player/${{encodeURIComponent(token)}}/data`, {{
-                headers: {{ "Accept": "application/json" }},
-                signal: controller.signal
-              }});
+              const response = await fetch(`/signup/player/${{encodeURIComponent(token)}}/data`, {{ headers: {{ "Accept": "application/json" }} }});
               if (!response.ok) throw new Error(await response.text());
               const data = await response.json();
               renderSignedUp(data.signedUpGroups || []);
               renderOpen(data.openGroups || []);
             }} catch (error) {{
-              const message = error.name === "AbortError"
-                ? "Het laden duurt te lang. Vernieuw de pagina om opnieuw te proberen."
-                : (error.message || error);
+              const message = error.message || error;
               openList.innerHTML = `<li><div><strong>Laden mislukt</strong><span>${{escapeHtml(message)}}</span></div></li>`;
-            }} finally {{
-              window.clearTimeout(timeout);
-              stopLoader();
-            }}
+            }} finally {{ stopLoader(); }}
           }}
-
           loadData();
         </script>
       </body>
@@ -1468,6 +1678,26 @@ def player_signup_data(token: str) -> dict:
     return player_signup_payload(invite)
 
 
+@app.get("/signup/player/{token}/rules")
+def player_signup_rules(token: str) -> dict:
+    invite = get_invite(token)
+    if invite is None or invite.get("kind") != "player_signup":
+        raise HTTPException(status_code=404, detail="Signup link not found")
+    if invite.get("status") != ACTIVE_PLAYER_SIGNUP_STATUS:
+        raise HTTPException(status_code=409, detail="Signup link is not active")
+    return player_signup_rules_payload(invite)
+
+
+@app.post("/signup/player/{token}/rules/{rule_index}/add")
+def player_signup_rule_add(token: str, rule_index: int) -> dict:
+    return update_player_booking_rule(token, rule_index, "add")
+
+
+@app.post("/signup/player/{token}/rules/{rule_index}/remove")
+def player_signup_rule_remove(token: str, rule_index: int) -> dict:
+    return update_player_booking_rule(token, rule_index, "remove")
+
+
 @app.post("/takeover/{token}/cancel", response_class=HTMLResponse)
 def takeover_cancel_booking(token: str) -> HTMLResponse:
     invite = get_invite(token)
@@ -1536,11 +1766,28 @@ def accept_signup(token: str) -> HTMLResponse:
         raise HTTPException(status_code=400, detail="Signup player has no encodedContactId")
 
     updated_bookings = []
+    signup_bookings = []
     for booking in invite.get("bookings") or [invite.get("booking") or {}]:
         booking_ref = booking.get("encodedBookingReference")
         if not booking_ref:
             continue
         current = find_booking(booking_ref) or booking
+        signup_bookings.append(current)
+    blockers = booking_rule_add_blockers(player_id, signup_bookings)
+    if blockers:
+        return render_signup_page(
+            invite,
+            message=(
+                "Deze booking rule heeft al 4 spelende spelers in de config. "
+                "Verwijder eerst een speler uit de rule of zet een member op 'Speelt niet mee'."
+            ),
+            status_code=409,
+        )
+
+    for current in signup_bookings:
+        booking_ref = current.get("encodedBookingReference")
+        if not booking_ref:
+            continue
         effective_ids = effective_booking_player_ids(current)
         if player_id not in effective_ids:
             player_ids, can_update_david_lloyd = update_ids_for_signup(current, player_id)
@@ -1555,6 +1802,7 @@ def accept_signup(token: str) -> HTMLResponse:
             updated_bookings.append(result.get("booking") or current)
         else:
             updated_bookings.append(current)
+        add_player_to_booking_rules(player_id, current)
 
     update_invite(token, status="accepted", acceptedAt=datetime.now().isoformat(timespec="seconds"))
     return render_signup_page(
@@ -1630,6 +1878,7 @@ def cancel_player_signup(token: str, booking_reference: str) -> HTMLResponse:
         ]
         if len(ids) != len(booking_player_ids(booking)):
             update_booking_players_with_ids(booking["encodedBookingReference"], ids)
+        remove_player_from_booking_rules(player_id, booking)
 
     if signup_index is not None:
         signups[signup_index]["cancelledAt"] = datetime.now().isoformat(timespec="seconds")
@@ -1660,8 +1909,21 @@ def join_player_signup(token: str, booking_reference: str) -> HTMLResponse:
         if len(player_ids) >= 4:
             return render_player_signup_page(invite, [], message="Deze wedstrijd zit inmiddels vol.", status_code=409)
 
+    blockers = booking_rule_add_blockers(player_id, group)
+    if blockers:
+        return render_player_signup_page(
+            invite,
+            [],
+            message=(
+                "Deze booking rule heeft al 4 spelende spelers in de config. "
+                "Verwijder eerst een speler uit de rule of zet een member op 'Speelt niet mee'."
+            ),
+            status_code=409,
+        )
+
     updated = []
     not_added_to_david_lloyd = []
+    config_rule_updates = []
     for booking in group:
         effective_ids = effective_booking_player_ids(booking)
         if player_id not in effective_ids:
@@ -1674,11 +1936,13 @@ def join_player_signup(token: str, booking_reference: str) -> HTMLResponse:
                 updated.append(booking)
         else:
             updated.append(booking)
+        config_rule_updates.append(add_player_to_booking_rules(player_id, booking))
 
     signups = list(invite.get("signups") or [])
     signups.append({
         "joinedAt": datetime.now().isoformat(timespec="seconds"),
         "bookingReferences": [booking.get("encodedBookingReference") for booking in updated],
+        "configRuleUpdates": config_rule_updates,
     })
     invite = update_invite(token, signups=signups)
     if not_added_to_david_lloyd:

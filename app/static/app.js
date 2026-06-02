@@ -273,6 +273,27 @@ function parseCsvNumbers(value) {
     .filter(Number.isFinite);
 }
 
+function formatCourtAliases(aliases = {}) {
+  return Object.entries(aliases)
+    .map(([courtId, alias]) => `${courtId}=${alias}`)
+    .join("\n");
+}
+
+function parseCourtAliases(value) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce((aliases, line) => {
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex <= 0) return aliases;
+      const courtId = line.slice(0, separatorIndex).trim();
+      const alias = line.slice(separatorIndex + 1).trim();
+      if (courtId && alias) aliases[courtId] = alias;
+      return aliases;
+    }, {});
+}
+
 function timesToString(times) {
   return (times || []).join(", ");
 }
@@ -616,6 +637,7 @@ function fillForm(config) {
   $("sportsPackageId").value = config.padel.sports_package_id ?? 63;
   $("fallbackToAny").checked = Boolean(config.padel.fallback_to_any);
   $("preferredCourts").value = (config.padel.preferred_courts || []).join(", ");
+  $("courtAliases").value = formatCourtAliases(config.padel.court_aliases || {});
   $("inviteMessageTemplates").value = joinMessageTemplates(
     config.padel.invite_message_templates,
     config.padel.invite_message_template
@@ -659,14 +681,17 @@ function collectForm() {
   }));
   const inviteMessageTemplates = collectInviteMessageTemplates();
 
-  const reservedPlayerIds = new Set([...members.map((member) => member.member_id), ...alwaysAddPlayerIds]);
+  const reservedPlayerIds = new Set([
+    ...members.filter((member) => member.plays !== false).map((member) => member.member_id),
+    ...alwaysAddPlayerIds,
+  ]);
   const invalidRulePlayers = rules.flatMap((rule) =>
     rule.player_ids
       .filter((playerId) => reservedPlayerIds.has(playerId))
       .map((playerId) => `${rule.day}: ${playerId}`)
   );
   if (invalidRulePlayers.length) {
-    throw new Error(`Rule players mogen niet ook in Members of Always add staan:\n${invalidRulePlayers.join("\n")}`);
+    throw new Error(`Rule players mogen niet ook in spelende Members of Always add staan:\n${invalidRulePlayers.join("\n")}`);
   }
 
   return {
@@ -687,6 +712,7 @@ function collectForm() {
       known_players: ensureKnownPlayers(),
       always_add_player_ids: alwaysAddPlayerIds,
       preferred_courts: parseCsvNumbers($("preferredCourts").value),
+      court_aliases: parseCourtAliases($("courtAliases").value),
       fallback_to_any: $("fallbackToAny").checked,
       invite_message_template: inviteMessageTemplates[0] || "",
       invite_message_templates: inviteMessageTemplates,
